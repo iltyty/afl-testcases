@@ -1,0 +1,56 @@
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+source $testdir/lock_common.tcl
+source $testdir/malloc_common.tcl
+
+do_test tkt-fc62af4523.1 {
+  execsql {
+    PRAGMA cache_size = 10;
+    PRAGMA journal_mode = persist;
+    CREATE TABLE t1(a UNIQUE, b UNIQUE);
+    INSERT INTO t1 SELECT randomblob(200), randomblob(300);
+    INSERT INTO t1 SELECT randomblob(200), randomblob(300) FROM t1; --  2
+    INSERT INTO t1 SELECT randomblob(200), randomblob(300) FROM t1; --  4
+    INSERT INTO t1 SELECT randomblob(200), randomblob(300) FROM t1; --  8
+    INSERT INTO t1 SELECT randomblob(200), randomblob(300) FROM t1; -- 16
+    INSERT INTO t1 SELECT randomblob(200), randomblob(300) FROM t1; -- 32
+    INSERT INTO t1 SELECT randomblob(200), randomblob(300) FROM t1; -- 64
+  }
+  execsql {
+    PRAGMA integrity_check;
+    SELECT count(*) FROM t1;
+  }
+} {ok 64}
+
+set ::chan [launch_testfixture]
+proc buddy {code} { testfixture $::chan $code }
+do_test tkt-fc62af4523.2 {
+  testfixture $::chan {
+    sqlite3 db test.db
+    db eval {
+      PRAGMA cache_size = 10;
+      BEGIN;
+        UPDATE t1 SET b = randomblob(400);
+        UPDATE t1 SET a = randomblob(201);
+    }
+  }
+  file exists test.db-journal
+} {1}
+
+do_test tkt-fc62af4523.3 { execsql { PRAGMA journal_mode = DELETE } } {delete}
+do_test tkt-fc62af4523.4 { file exists test.db-journal } {1}
+
+do_test tkt-fc62af4523.5 {
+  testfixture $::chan sqlite_abort
+} {ERROR: Child process hung up}
+after 200
+do_test tkt-fc62af4523.6 {
+  execsql {
+    PRAGMA integrity_check;
+    SELECT count(*) FROM t1;
+  }
+} {ok 64}
+
+catch { close $::chan }
+finish_test

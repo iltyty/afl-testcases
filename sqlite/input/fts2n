@@ -1,0 +1,150 @@
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+ifcapable !fts2 {
+  finish_test
+  return
+}
+
+set text {
+  Lorem ipsum dolor sit amet, consectetuer adipiscing elit. Maecenas
+  iaculis mollis ipsum. Praesent rhoncus placerat justo. Duis non quam
+  sed turpis posuere placerat. Curabitur et lorem in lorem porttitor
+  aliquet. Pellentesque bibendum tincidunt diam. Vestibulum blandit
+  ante nec elit. In sapien diam, facilisis eget, dictum sed, viverra
+  at, felis. Vestibulum magna. Sed magna dolor, vestibulum rhoncus,
+  ornare vel, vulputate sit amet, felis. Integer malesuada, tellus at
+  luctus gravida, diam nunc porta nibh, nec imperdiet massa metus eu
+  lectus. Aliquam nisi. Nunc fringilla nulla at lectus. Suspendisse
+  potenti. Cum sociis natoque penatibus et magnis dis parturient
+  montes, nascetur ridiculus mus. Pellentesque odio nulla, feugiat eu,
+  suscipit nec, consequat quis, risus.
+}
+
+db eval {
+  CREATE VIRTUAL TABLE t1 USING fts2(c);
+
+  INSERT INTO t1(rowid, c) VALUES(1, $text);
+  INSERT INTO t1(rowid, c) VALUES(2, 'Another lovely row');
+}
+
+do_test fts2n-1.1 {
+  execsql "SELECT rowid FROM t1 WHERE t1 MATCH 'lorem'"
+} {1}
+
+do_test fts2n-1.2 {
+  execsql "SELECT rowid FROM t1 WHERE t1 MATCH 'lore*'"
+} {1}
+
+do_test fts2n-1.3 {
+  execsql "SELECT rowid FROM t1 WHERE t1 MATCH 'lorem*'"
+} {1}
+
+do_test fts2n-1.4 {
+  execsql "SELECT rowid FROM t1 WHERE t1 MATCH 'lore'"
+} {}
+
+do_test fts2n-1.5 {
+  execsql "SELECT rowid FROM t1 WHERE t1 MATCH 'lo*'"
+} {1 2}
+
+do_test fts2n-1.6 {
+  execsql "SELECT rowid FROM t1 WHERE t1 MATCH 'l*'"
+} {1 2}
+
+do_test fts2n-1.7 {
+  execsql "SELECT rowid FROM t1 WHERE t1 MATCH 'lov*'"
+} {2}
+
+do_test fts2n-1.8 {
+  execsql "SELECT rowid FROM t1 WHERE t1 MATCH 'lo *'"
+} {}
+
+do_test fts2n-1.9 {
+  execsql "SELECT rowid FROM t1 WHERE t1 MATCH '*'"
+} {}
+
+do_test fts2n-1.10 {
+  execsql "SELECT rowid FROM t1 WHERE t1 MATCH '\"lovely r*\"'"
+} {2}
+do_test fts2n-1.11 {
+  execsql "SELECT rowid FROM t1 WHERE t1 MATCH '\"lovely r\"'"
+} {}
+
+do_test fts2n-1.12 {
+  execsql "SELECT rowid FROM t1 WHERE t1 MATCH '\"a* l*\"'"
+} {1 2}
+
+do_test fts2n-1.13 {
+  execsql "SELECT rowid FROM t1 WHERE t1 MATCH '\"a* l* row\"'"
+} {2}
+
+
+
+
+
+regsub -all {[Ll]orem} $text '' ntext
+
+db eval {
+  CREATE VIRTUAL TABLE t2 USING fts2(c);
+
+  INSERT INTO t2(rowid, c) VALUES(1, $text);
+  INSERT INTO t2(rowid, c) VALUES(2, 'Another lovely row');
+  UPDATE t2 SET c = $ntext WHERE rowid = 1;
+}
+
+do_test fts2n-2.1 {
+  execsql "SELECT rowid FROM t2 WHERE t2 MATCH 'lorem'"
+} {}
+
+do_test fts2n-2.2 {
+  execsql "SELECT rowid FROM t2 WHERE t2 MATCH 'lore*'"
+} {}
+
+do_test fts2n-2.3 {
+  execsql "SELECT rowid FROM t2 WHERE t2 MATCH 'lo*'"
+} {2}
+
+do_test fts2n-2.4 {
+  execsql "SELECT rowid FROM t2 WHERE t2 MATCH 'l*'"
+} {1 2}
+
+do_test fts2n-2.5 {
+  execsql "SELECT rowid FROM t2 WHERE t2 MATCH 'lov*'"
+} {2}
+
+
+
+
+set bigtext $text
+foreach c {a b c d e} {
+  regsub -all {[A-Za-z]+} $bigtext "&$c" t
+  append bigtext $t
+}
+
+set ret {6 1}
+db eval {
+  BEGIN;
+  CREATE VIRTUAL TABLE t3 USING fts2(c);
+
+  INSERT INTO t3(rowid, c) VALUES(1, $text);
+  INSERT INTO t3(rowid, c) VALUES(2, 'Another lovely row');
+}
+for {set i 0} {$i<100} {incr i} {
+  db eval {INSERT INTO t3(rowid, c) VALUES(3+$i, $bigtext)}
+  lappend ret 192
+}
+db eval {COMMIT;}
+
+do_test fts2n-3.1 {
+  set t {}
+  db eval {SELECT offsets(t3) as o FROM t3 WHERE t3 MATCH 'l*'} {
+    set l [llength $o]
+    lappend t [expr {$l/4}]
+  }
+  set t
+} $ret
+
+
+finish_test

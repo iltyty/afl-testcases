@@ -1,0 +1,52 @@
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+ifcapable !altertable {
+  finish_test
+  return
+}
+
+source $testdir/malloc_common.tcl
+
+do_malloc_test altermalloc-1 -tclprep {
+  db close
+} -tclbody {
+  if {[catch {sqlite3 db test.db}]} {
+    error "out of memory"
+  }
+  sqlite3_db_config_lookaside db 0 0 0
+  sqlite3_extended_result_codes db 1
+} -sqlbody {
+  CREATE TABLE t1(a int);
+  ALTER TABLE t1 ADD COLUMN b INTEGER DEFAULT NULL;
+  ALTER TABLE t1 ADD COLUMN c TEXT DEFAULT 'default-text';
+  ALTER TABLE t1 RENAME TO t2;
+  ALTER TABLE t2 ADD COLUMN d BLOB DEFAULT X'ABCD';
+}
+
+ifcapable vtab {
+  do_malloc_test altermalloc-vtab -tclprep {
+    sqlite3 db2 test.db 
+    sqlite3_db_config_lookaside db2 0 0 0
+    sqlite3_extended_result_codes db2 1
+    register_echo_module [sqlite3_connection_pointer db2]
+    db2 eval {
+      CREATE TABLE t1(a, b VARCHAR, c INTEGER);
+      CREATE VIRTUAL TABLE t1echo USING echo(t1);
+    }
+    db2 close
+
+    register_echo_module [sqlite3_connection_pointer db]
+  } -tclbody {
+    set rc [catch {db eval { ALTER TABLE t1echo RENAME TO t1_echo }} msg]
+    if {$msg eq "vtable constructor failed: t1echo"} {
+      set msg "out of memory"
+    }
+    if {$rc} {
+      error $msg
+    }
+  }
+}
+
+finish_test

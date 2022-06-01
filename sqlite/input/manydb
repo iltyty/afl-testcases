@@ -1,0 +1,72 @@
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+set N 300
+set using_proxy 0
+foreach {name value} [array get env SQLITE_FORCE_PROXY_LOCKING] {
+  set using_proxy value
+}
+set num_fd_per_openwrite_db 3
+if {$using_proxy>0} {
+  set num_fd_per_openwrite_db 5
+} 
+
+set filehandles {}
+catch {
+  for {set i 0} {$i<($N * 3)} {incr i} {
+    lappend filehandles [open testfile.1 w]
+  }
+}
+foreach fd $filehandles {
+  close $fd
+}
+catch {
+  forcedelete testfile.1
+}
+set N [expr $i / $num_fd_per_openwrite_db]
+
+unset -nocomplain dbname
+unset -nocomplain used
+for {set i 0} {$i<$N} {incr i} {
+  while 1 {
+    set name test-[format %08x [expr {int(rand()*0x7fffffff)}]].db
+    if {[info exists used($name)]} continue
+    set dbname($i) $name
+    set used($name) $i
+    break
+  }
+}
+
+for {set i 0} {$i<$N} {incr i} {
+  do_test manydb-1.$i {
+    sqlite3 db$i $dbname($i)
+    execsql {
+       CREATE TABLE t1(a,b);
+       BEGIN;
+       INSERT INTO t1 VALUES(1,2);
+    } db$i
+  } {}
+}
+
+for {set i 0} {$i<$N} {incr i} {
+  do_test manydb-2.$i {
+    execsql {
+       COMMIT;
+       SELECT * FROM t1;
+    } db$i
+  } {1 2}
+}
+
+
+for {set i 0} {$i<$N} {incr i} {
+  do_test manydb-3.$i {
+    db$i close
+    forcedelete $dbname($i)
+  } {}
+}
+
+
+
+
+finish_test

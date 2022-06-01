@@ -1,0 +1,63 @@
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+ifcapable !autovacuum||!tclvar {
+  finish_test
+  return
+}
+
+db close
+forcedelete test.db test.db-journal
+
+
+set first_ptrmap_page   [expr 1024/5 + 3]
+sqlite3_test_control_pending_byte [expr 1024 * ($first_ptrmap_page-1)]
+
+sqlite3 db test.db
+
+do_test tkt1667-1 {
+  execsql {
+    PRAGMA auto_vacuum = 1;
+    BEGIN;
+    CREATE TABLE t1(a, b);
+  }
+  for {set i 0} {$i < 500} {incr i} {
+    execsql {
+      INSERT INTO t1 VALUES($i, randstr(1000, 2000))
+    }
+  }
+  execsql {
+    COMMIT;
+  }
+} {}
+for {set i 0} {$i < 500} {incr i} {
+  do_test tkt1667-2.$i.1 {
+    execsql {
+      DELETE FROM t1 WHERE a = $i;
+    }
+  } {}
+  integrity_check tkt1667-2.$i.2
+}
+
+do_test tkt1667-3 {
+  execsql {
+    BEGIN;
+  }
+  for {set i 0} {$i < 500} {incr i} {
+    execsql {
+      INSERT INTO t1 VALUES($i, randstr(1000, 2000))
+    }
+  }
+  execsql {
+    COMMIT;
+  }
+} {}
+do_test tkt1667-4.1 {
+  execsql {
+    DELETE FROM t1;
+  }
+} {}
+integrity_check tkt1667-4.2
+
+finish_test

@@ -1,0 +1,509 @@
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set ::testprefix io
+
+db close
+sqlite3_simulate_device
+sqlite3 db test.db -vfs devsym
+
+
+set ::nWrite 0
+proc nWrite {db} {
+  set bt [btree_from_db $db]
+  db_enter $db
+  array set stats [btree_pager_stats $bt]
+  db_leave $db
+  set res [expr $stats(write) - $::nWrite]
+  set ::nWrite $stats(write)
+  set res
+}
+
+set ::nSync 0
+proc nSync {} {
+  set res [expr {$::sqlite_sync_count - $::nSync}]
+  set ::nSync $::sqlite_sync_count
+  set res
+}
+
+do_test io-1.1 {
+  execsql {
+    PRAGMA auto_vacuum = OFF;
+    PRAGMA page_size = 1024;
+    CREATE TABLE abc(a,b);
+  }
+  nWrite db
+} {2}
+
+do_test io-1.2 {
+  set ret [list]
+  execsql { INSERT INTO abc VALUES(1,randstr(230,230)); }
+  lappend ret [nWrite db]
+  execsql { INSERT INTO abc VALUES(2,randstr(230,230)); }
+  lappend ret [nWrite db]
+  execsql { INSERT INTO abc VALUES(3,randstr(230,230)); }
+  lappend ret [nWrite db]
+  execsql { INSERT INTO abc VALUES(4,randstr(230,230)); }
+  lappend ret [nWrite db]
+} {2 2 2 2}
+
+do_test io-1.3 {
+  execsql { INSERT INTO abc VALUES(5,randstr(230,230)); }
+  nWrite db
+} {4}
+
+do_test io-1.4 {
+  set ret [list]
+  execsql { INSERT INTO abc VALUES(6,randstr(230,230)); }
+  lappend ret [nWrite db]
+  execsql { INSERT INTO abc VALUES(7,randstr(230,230)); }
+  lappend ret [nWrite db]
+  execsql { INSERT INTO abc VALUES(8,randstr(230,230)); }
+  lappend ret [nWrite db]
+} {2 2 2}
+
+do_test io-1.5 {
+  execsql { INSERT INTO abc VALUES(9,randstr(230,230)); }
+  nWrite db
+} {3}
+
+ifcapable atomicwrite {
+
+do_test io-2.1 {
+  execsql { DELETE FROM abc; VACUUM; }
+} {}
+
+nWrite db ; nSync
+
+do_test io-2.2 {
+  execsql { INSERT INTO abc VALUES(1, 2) }
+  list [nWrite db] [nSync]
+} {2 4}
+
+sqlite3_simulate_device -char atomic
+do_test io-2.3 {
+  execsql { INSERT INTO abc VALUES(3, 4) }
+  list [nWrite db] [nSync]
+} {2 1}
+
+do_test io-2.4.1 {
+  execsql {
+    BEGIN;
+    INSERT INTO abc VALUES(5, 6);
+  }
+  sqlite3 db2 test.db -vfs devsym
+  execsql { SELECT * FROM abc } db2
+} {1 2 3 4}
+do_test io-2.4.2 {
+  file exists test.db-journal
+} {0}
+do_test io-2.4.3 {
+  execsql { COMMIT }
+  execsql { SELECT * FROM abc } db2
+} {1 2 3 4 5 6}
+db2 close
+
+do_test io-2.5.1 {
+  execsql { CREATE TABLE def(d, e) }
+  nWrite db ; nSync
+  execsql {
+    BEGIN;
+    INSERT INTO abc VALUES(7, 8);
+  }
+  file exists test.db-journal
+} {0}
+do_test io-2.5.2 {
+  execsql { INSERT INTO def VALUES('a', 'b'); }
+  file exists test.db-journal
+} {1}
+do_test io-2.5.3 {
+  execsql { COMMIT }
+  list [nWrite db] [nSync]
+} {3 4}
+
+do_test io-2.6.1 {
+  execsql {
+    BEGIN IMMEDIATE;
+    -- INSERT INTO abc VALUES(9, randstr(1000,1000));
+  }
+  file exists test.db-journal
+} {0}
+do_test io-2.6.2 {
+  # Create a file at "test.db-journal". This will prevent SQLite from
+  # opening the journal for exclusive access. As a result, the COMMIT
+  # should fail with SQLITE_CANTOPEN and the transaction rolled back.
+  #
+  file mkdir test.db-journal
+  catchsql {
+    INSERT INTO abc VALUES(9, randstr(1000,1000));
+    COMMIT
+  }
+} {1 {unable to open database file}}
+do_test io-2.6.3 {
+  forcedelete test.db-journal
+  catchsql { COMMIT }
+} {0 {}}
+do_test io-2.6.4 {
+  execsql { SELECT * FROM abc }
+} {1 2 3 4 5 6 7 8}
+
+forcedelete test2.db test2.db-journal
+ifcapable attach {
+  do_test io-2.7.1 {
+    execsql {
+      ATTACH 'test2.db' AS aux;
+      PRAGMA aux.page_size = 1024;
+      CREATE TABLE aux.abc2(a, b);
+      BEGIN;
+      INSERT INTO abc VALUES(9, 10);
+    }
+    file exists test.db-journal
+  } {0}
+  do_test io-2.7.2 {
+    execsql { INSERT INTO abc2 SELECT * FROM abc }
+    file exists test2.db-journal
+  } {0}
+  do_test io-2.7.3 {
+    execsql { SELECT * FROM abc UNION ALL SELECT * FROM abc2 }
+  } {1 2 3 4 5 6 7 8 9 10 1 2 3 4 5 6 7 8 9 10}
+  do_test io-2.7.4 {
+    file mkdir test2.db-journal
+    catchsql { COMMIT }
+  } {1 {unable to open database file}}
+  do_test io-2.7.5 {
+    forcedelete test2.db-journal
+    catchsql { COMMIT }
+  } {1 {cannot commit - no transaction is active}}
+  do_test io-2.7.6 {
+    execsql { SELECT * FROM abc UNION ALL SELECT * FROM abc2 }
+  } {1 2 3 4 5 6 7 8}
+}
+
+do_test io-2.8.1 {
+  execsql {
+    BEGIN;
+    DELETE FROM abc;
+  }
+  file exists test.db-journal
+} {0}
+do_test io-2.8.2 {
+  execsql { SELECT * FROM abc }
+} {}
+do_test io-2.8.3 {
+  execsql {
+    ROLLBACK;
+    SELECT * FROM abc;
+  }
+} {1 2 3 4 5 6 7 8}
+
+do_test io-2.9.1 {
+  db close
+  sqlite3 db test.db
+  sqlite3_simulate_device -char atomic -sectorsize 2048
+  execsql {
+    BEGIN;
+    INSERT INTO abc VALUES(9, 10);
+  }
+  file exists test.db-journal
+} {1}
+do_test io-2.9.2 {
+  execsql { ROLLBACK; }
+  db close
+  forcedelete test.db test.db-journal
+  sqlite3 db test.db -vfs devsym
+  execsql {
+    PRAGMA auto_vacuum = OFF;
+    PRAGMA page_size = 2048;
+    CREATE TABLE abc(a, b);
+  }
+  execsql {
+    BEGIN;
+    INSERT INTO abc VALUES(9, 10);
+  }
+  file exists test.db-journal
+} {0}
+do_test io-2.9.3 {
+  execsql { COMMIT }
+} {}
+
+do_test io-2.10.1 {
+  sqlite3_simulate_device -char atomic1k
+  execsql {
+    BEGIN;
+    INSERT INTO abc VALUES(11, 12);
+  }
+  file exists test.db-journal
+} {1}
+do_test io-2.10.2 {
+  execsql { ROLLBACK }
+  sqlite3_simulate_device -char atomic2k
+  execsql {
+    BEGIN;
+    INSERT INTO abc VALUES(11, 12);
+  }
+  file exists test.db-journal
+} {0}
+do_test io-2.10.3 {
+  execsql { ROLLBACK }
+} {}
+
+do_test io-2.11.0 {
+  execsql { 
+    PRAGMA locking_mode = exclusive;
+    PRAGMA locking_mode;
+  }
+} {exclusive exclusive}
+do_test io-2.11.1 {
+  execsql { 
+    INSERT INTO abc VALUES(11, 12);
+  }
+  file exists test.db-journal
+} {0}
+
+do_test io-2.11.2 {
+  execsql { 
+    PRAGMA locking_mode = normal;
+    INSERT INTO abc VALUES(13, 14);
+  }
+  file exists test.db-journal
+} {0}
+
+} ;# /* ifcapable atomicwrite */
+
+sqlite3_simulate_device -char sequential -sectorsize 0
+ifcapable pager_pragmas {
+  do_test io-3.1 {
+    db close
+    forcedelete test.db test.db-journal
+    sqlite3 db test.db -vfs devsym
+    db eval {
+      PRAGMA auto_vacuum=OFF;
+    }
+    # File size might be 1 due to the hack to work around ticket #3260.
+    # Search for #3260 in os_unix.c for additional information.
+    expr {[file size test.db]>1}
+  } {0}
+  do_test io-3.2 {
+    execsql { CREATE TABLE abc(a, b) }
+    nSync
+    execsql {
+      PRAGMA temp_store = memory;
+      PRAGMA cache_size = 10;
+      BEGIN;
+      INSERT INTO abc VALUES('hello', 'world');
+      INSERT INTO abc SELECT * FROM abc;
+      INSERT INTO abc SELECT * FROM abc;
+      INSERT INTO abc SELECT * FROM abc;
+      INSERT INTO abc SELECT * FROM abc;
+      INSERT INTO abc SELECT * FROM abc;
+      INSERT INTO abc SELECT * FROM abc;
+      INSERT INTO abc SELECT * FROM abc;
+      INSERT INTO abc SELECT * FROM abc;
+      INSERT INTO abc SELECT * FROM abc;
+      INSERT INTO abc SELECT * FROM abc;
+      INSERT INTO abc SELECT * FROM abc;
+    }
+    # File has grown - showing there was a cache-spill - but there 
+    # have been no calls to fsync(). The file is probably about 30KB.
+    # But some VFS implementations (symbian) buffer writes so the actual
+    # size may be a little less than that. So this test case just tests
+    # that the file is now greater than 20000 bytes in size.
+    list [expr [file size test.db]>20000] [nSync]
+  } {1 0}
+  do_test io-3.3 {
+    # The COMMIT requires a single fsync() - to the database file.
+    execsql { COMMIT }
+    list [file size test.db] [nSync]
+  } "[expr {[nonzero_reserved_bytes]?40960:39936}] 1"
+}
+
+sqlite3_simulate_device -char safe_append
+
+set expected_sync_count 2
+if {$::tcl_platform(platform)=="unix"} {
+  ifcapable dirsync {
+    incr expected_sync_count
+  }
+}
+
+do_test io-4.1 {
+  execsql { DELETE FROM abc }
+  nSync
+  execsql { INSERT INTO abc VALUES('a', 'b') }
+  nSync
+} $expected_sync_count
+
+do_test io-4.2.1 {
+  execsql { BEGIN }
+  execsql { INSERT INTO abc VALUES('c', 'd') }
+  file exists test.db-journal
+} {1}
+if {$::tcl_platform(platform)=="unix"} {
+  do_test io-4.2.2 {
+    hexio_read test.db-journal 8 4
+  } {FFFFFFFF}
+}
+do_test io-4.2.3 {
+  execsql { COMMIT }
+  nSync
+} $expected_sync_count
+sqlite3_simulate_device -char safe_append
+
+do_test io-4.3.1 {
+  execsql {
+    INSERT INTO abc SELECT * FROM abc;
+    INSERT INTO abc SELECT * FROM abc;
+    INSERT INTO abc SELECT * FROM abc;
+    INSERT INTO abc SELECT * FROM abc;
+    INSERT INTO abc SELECT * FROM abc;
+    INSERT INTO abc SELECT * FROM abc;
+    INSERT INTO abc SELECT * FROM abc;
+    INSERT INTO abc SELECT * FROM abc;
+    INSERT INTO abc SELECT * FROM abc;
+    INSERT INTO abc SELECT * FROM abc;
+    INSERT INTO abc SELECT * FROM abc;
+  }
+  expr {[file size test.db]/1024}
+} {43}
+ifcapable pager_pragmas {
+  do_test io-4.3.2 {
+    execsql {
+      PRAGMA synchronous = full;
+      PRAGMA cache_size = 10;
+      PRAGMA synchronous;
+    }
+  } {2}
+}
+do_test io-4.3.3 {
+  execsql {
+    BEGIN;
+    UPDATE abc SET a = 'x';
+  }
+  file exists test.db-journal
+} {1}
+if {$tcl_platform(platform) != "symbian"} {
+  # This test is not run on symbian because the file-buffer makes it
+  # difficult to predict the exact size of the file as reported by 
+  # [file size].
+  do_test io-4.3.4 {
+    # The UPDATE statement in the statement above modifies 41 pages 
+    # (all pages in the database except page 1 and the root page of 
+    # abc). Because the cache_size is set to 10, this must have required
+    # at least 4 cache-spills. If there were no journal headers written
+    # to the journal file after the cache-spill, then the size of the
+    # journal file is give by:
+    #
+    #    <jrnl file size> = <jrnl header size> + nPage * (<page-size> + 8)
+    #
+    # If the journal file contains additional headers, this formula
+    # will not predict the size of the journal file.
+    #
+    file size test.db-journal
+  } [expr 512 + (1024+8)*41]
+}
+
+set tn 0
+foreach {char                 sectorsize pgsize} {
+         {}                     512      1024
+         {}                    1024      1024
+         {}                    2048      2048
+         {}                    8192      8192
+         {}                   16384      8192
+         {atomic}               512      8192
+         {atomic512}            512      1024
+         {atomic2K}             512      2048
+         {atomic2K}            4096      4096
+         {atomic2K atomic}      512      8192
+         {atomic64K}            512      1024
+} {
+  incr tn
+  if {$pgsize>$::SQLITE_MAX_PAGE_SIZE} continue
+  db close
+  forcedelete test.db test.db-journal
+  sqlite3_simulate_device -char $char -sectorsize $sectorsize
+  sqlite3 db test.db -vfs devsym
+  db eval {
+    PRAGMA auto_vacuum=OFF;
+  }
+  ifcapable !atomicwrite {
+    if {[regexp {^atomic} $char]} continue
+  }
+  do_test io-5.$tn {
+    execsql {
+      CREATE TABLE abc(a, b, c);
+    }
+    expr {[file size test.db]/2}
+  } $pgsize
+}
+
+do_test io-6.1 {
+  db close
+  sqlite3_simulate_device -char atomic
+  forcedelete test.db
+  sqlite3 db test.db -vfs devsym
+  execsql {
+    PRAGMA mmap_size = 0;
+    PRAGMA page_size = 1024;
+    PRAGMA cache_size = 2000;
+    CREATE TABLE t1(x);
+    CREATE TABLE t2(x);
+    CREATE TABLE t3(x);
+    CREATE INDEX i3 ON t3(x);
+    INSERT INTO t3 VALUES(randomblob(100));
+    INSERT INTO t3 SELECT randomblob(100) FROM t3;
+    INSERT INTO t3 SELECT randomblob(100) FROM t3;
+    INSERT INTO t3 SELECT randomblob(100) FROM t3;
+    INSERT INTO t3 SELECT randomblob(100) FROM t3;
+    INSERT INTO t3 SELECT randomblob(100) FROM t3;
+    INSERT INTO t3 SELECT randomblob(100) FROM t3;
+    INSERT INTO t3 SELECT randomblob(100) FROM t3;
+    INSERT INTO t3 SELECT randomblob(100) FROM t3;
+    INSERT INTO t3 SELECT randomblob(100) FROM t3;
+    INSERT INTO t3 SELECT randomblob(100) FROM t3;
+    INSERT INTO t3 SELECT randomblob(100) FROM t3;
+  }
+
+  db_save_and_close
+} {}
+
+foreach {tn sql} {
+  1 { BEGIN;
+        INSERT INTO t1 VALUES('123');
+        INSERT INTO t2 VALUES('456');
+      COMMIT;
+  }
+  2 { BEGIN;
+        INSERT INTO t1 VALUES('123');
+      COMMIT;
+  }
+} {
+
+  # These tests don't work with memsubsys1, as it causes the effective page
+  # cache size to become too small to hold the entire db in memory.
+  if {[permutation] == "memsubsys1"} continue
+
+  db_restore
+  sqlite3 db test.db -vfs devsym
+  execsql {
+    PRAGMA cache_size = 2000;
+    PRAGMA mmap_size = 0;
+    SELECT x FROM t3 ORDER BY rowid;
+    SELECT x FROM t3 ORDER BY x;
+  }
+  do_execsql_test 6.2.$tn.1 { PRAGMA integrity_check } {ok}
+  do_execsql_test 6.2.$tn.2 $sql
+
+  # Corrupt the database file on disk. This should not matter for the
+  # purposes of the following "PRAGMA integrity_check", as the entire
+  # database should be cached in the pager-cache. If corruption is
+  # reported, it indicates that executing $sql caused the pager cache
+  # to be flushed. Which is a bug.
+  hexio_write test.db [expr 1024 * 5] [string repeat 00 2048]
+  do_execsql_test 6.2.$tn.3 { PRAGMA integrity_check } {ok}
+  db close
+}
+
+sqlite3_simulate_device -char {} -sectorsize 0
+unregister_devsim
+
+finish_test

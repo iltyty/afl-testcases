@@ -1,0 +1,64 @@
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+sqlite3 db test.db
+do_test dataversion1-100 {
+  db eval {
+    CREATE TABLE t1(x);
+    INSERT INTO t1(x) VALUES(99);
+    SELECT * FROM t1;
+  }
+} {99}
+set dv1 [file_control_data_version db main]
+
+do_test dataversion1-101 {
+  db eval {
+    ATTACH ':memory:' AS aux1;
+    CREATE TABLE aux1.t2(y);
+    CREATE TEMP TABLE t3(z);
+  }
+  file_control_data_version db main
+} $dv1
+
+do_test dataversion1-110 {
+  db eval {
+    UPDATE t1 SET x=x+1;
+  }
+  set dv2 [file_control_data_version db]
+  expr {$::dv1==$dv2}
+} {0}
+
+set dv1 [file_control_data_version db main]
+do_test dataversion1-120 {
+  db eval {
+    UPDATE t2 SET y=y+1;
+  }
+  file_control_data_version db
+} $dv1
+
+sqlite3 db2 test.db
+do_test dataversion1-130 {
+  db2 eval {
+    SELECT * FROM t1
+  }
+} {100}
+do_test dataversion1-131 {
+  file_control_data_version db
+} $dv1
+do_test dataversion1-132 {
+  db2 eval {
+    UPDATE t1 SET x=x+1;
+  }
+  set dv2 [file_control_data_version db]
+  expr {$::dv1==$dv2}
+} {1}
+do_test dataversion1-133 {
+  db eval {SELECT * FROM t1}
+  set dv2 [file_control_data_version db]
+  expr {$::dv1==$dv2}
+} {0}
+
+
+   
+finish_test

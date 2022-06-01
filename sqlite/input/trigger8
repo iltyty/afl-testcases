@@ -1,0 +1,32 @@
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+ifcapable {!trigger} {
+  finish_test
+  return
+}
+
+set nStatement 10000
+if {$tcl_platform(platform) == "symbian"} {
+  set nStatement 1000
+}
+
+set nStatement 5
+do_test trigger8-1.1 {
+  execsql {
+    CREATE TABLE t1(x);
+    CREATE TABLE t2(y);
+  }
+  set sql "CREATE TRIGGER r${nStatement} AFTER INSERT ON t1 BEGIN\n"
+  for {set i 0} {$i<$nStatement} {incr i} {
+    append sql "  INSERT INTO t2 VALUES($i);\n"
+  }
+  append sql "END;"
+  execsql $sql
+  execsql {
+    INSERT INTO t1 VALUES(5);
+    SELECT count(*) FROM t2;
+  }
+} $nStatement
+
+finish_test

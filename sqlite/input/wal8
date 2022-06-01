@@ -1,0 +1,66 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set ::testprefix wal8
+ifcapable !wal {finish_test ; return }
+do_not_use_codec
+
+db close
+forcedelete test.db test.db-wal
+
+sqlite3 db test.db
+sqlite3 db2 test.db
+
+do_test 1.0 {
+  execsql {
+    PRAGMA journal_mode = wal;
+    CREATE TABLE t1(a, b);
+    INSERT INTO t1 VALUES(1, 2);
+  } db2
+} {wal}
+
+do_catchsql_test 1.1 {
+  PRAGMA page_size = 4096;
+  VACUUM;
+} {0 {}}
+
+db close
+db2 close
+forcedelete test.db test.db-wal
+
+sqlite3 db test.db
+sqlite3 db2 test.db
+
+do_test 2.0 {
+  execsql {
+    CREATE TABLE t1(a, b);
+    INSERT INTO t1 VALUES(1, 2);
+    PRAGMA journal_mode = wal;
+  } db2
+} {wal}
+
+do_catchsql_test 2.1 {
+  PRAGMA page_size = 4096;
+  VACUUM;
+} {0 {}}
+
+db close
+db2 close
+forcedelete test.db test.db-wal
+
+sqlite3 db test.db
+sqlite3 db2 test.db
+
+do_test 3.0 {
+  execsql {
+    PRAGMA journal_mode = wal;
+    CREATE TABLE t1(a, b);
+    INSERT INTO t1 VALUES(1, 2);
+  } db2
+} {wal}
+
+do_execsql_test 3.1 {
+  PRAGMA page_size = 4096;
+  SELECT name FROM sqlite_master;
+} {t1}
+
+finish_test

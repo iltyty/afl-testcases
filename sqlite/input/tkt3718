@@ -1,0 +1,169 @@
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+do_test tkt3718-1.1 {
+  execsql {
+    CREATE TABLE t1(a PRIMARY KEY, b);
+    INSERT INTO t1 VALUES(1, 'one');
+    INSERT INTO t1 VALUES(2, 'two');
+    INSERT INTO t1 VALUES(3, 'three');
+    INSERT INTO t1 VALUES(4, 'four');
+    INSERT INTO t1 VALUES(5, 'five');
+    CREATE TABLE t2(a PRIMARY KEY, b);
+  }
+} {}
+
+proc f1 {args} {
+  set a [lindex $args 0]
+  catch { db eval {SELECT f2($a)} } msg
+  set msg
+}
+
+proc f2 {args} {
+  set a [lindex $args 0]
+  if {$a == "three"} { error "Three!!" }
+  return $a
+}
+
+db func f1 f1
+db func f2 f2
+
+do_test tkt3718-1.2 {
+  execsql {
+    BEGIN;
+    INSERT INTO t2 SELECT a, b FROM t1;
+    INSERT INTO t2 SELECT a+5, f1(b) FROM t1;
+    COMMIT;
+  }
+  execsql {
+    SELECT a FROM t2;
+  }
+} {1 2 3 4 5 6 7 8 9 10}
+
+do_test tkt3718-1.3 {
+  execsql { 
+    DELETE FROM t2 WHERE a > 5;
+    PRAGMA count_changes = 1;
+    BEGIN;
+  }
+  db eval {INSERT INTO t2 SELECT a+5, b||'+5' FROM t1} {
+    catch { db eval {SELECT f2('three')} } msg
+  }
+  execsql {
+    COMMIT;
+    SELECT a FROM t2;
+  }
+} {1 2 3 4 5 6 7 8 9 10}
+
+do_test tkt3718-1.4 {
+  execsql {pragma count_changes=0}
+} {}
+
+proc sql {doit zSql} {
+  if {$doit} { catchsql $zSql }
+}
+db func sql [list sql]
+
+do_test tkt3718-2.1 {
+  execsql { SELECT sql(1, 'DELETE FROM t2 WHERE a = '||a ) FROM t2 WHERE a>5 }
+  execsql { SELECT a from t2 }
+} {1 2 3 4 5}
+do_test tkt3718-2.2 {
+  execsql {
+    DELETE FROM t2 WHERE a > 5;
+    BEGIN;
+    INSERT INTO t2 SELECT a+5, sql(a==3,
+        'INSERT INTO t2 SELECT a+10, f2(b) FROM t1'
+    ) FROM t1;
+  }
+  execsql {
+    COMMIT;
+    SELECT a FROM t2;
+  }
+} {1 2 3 4 5 6 7 8 9 10}
+do_test tkt3718-2.3 {
+  execsql {
+    DELETE FROM t2 WHERE a > 5;
+    BEGIN;
+    INSERT INTO t2 SELECT a+5, sql(a==3,
+        'INSERT INTO t2 SELECT a+10, b FROM t1'
+    ) FROM t1;
+    COMMIT;
+  }
+  execsql { SELECT a FROM t2 ORDER BY a+0}
+} {1 2 3 4 5 6 7 8 9 10 11 12 13 14 15}
+integrity_check tkt3718.2-4
+
+foreach {tn io ii results} {
+  1 0 10 {1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20}
+  2 1 10 {6 7 8 9 10 16 17 18 19 20}
+  3 0 11 {1 2 3 4 5 6 7 8 9 10 16 17 18 19 20}
+  4 1 11 {6 7 8 9 10 16 17 18 19 20}
+} {
+  do_test tkt3718-3.$tn {
+    execsql { 
+      DELETE FROM t2;
+      INSERT INTO t2 SELECT a+5, b FROM t1;
+      INSERT INTO t2 SELECT a+15, b FROM t1;
+    }
+
+    catchsql "
+      BEGIN;
+      INSERT INTO t2 SELECT a+$io, sql(a==3,
+          'INSERT INTO t2 SELECT a+$ii, b FROM t1'
+      ) FROM t1;
+    "
+
+    execsql { COMMIT }
+
+    execsql { SELECT a FROM t2 ORDER BY a+0}
+  } $results
+
+  integrity_check tkt3718-3.$tn.integrity
+}
+
+foreach {tn i1 i2 i3 results} {
+  1   0 10 20   {5 10 15 20 25 30}
+  2   0 10 21   {5 10 15 20 30}
+  3   0 11 20   {5 10 20 30}
+  4   0 11 21   {5 10 20 30}
+  5   1 10 20   {10 20 30}
+  6   1 10 21   {10 20 30}
+  7   1 11 20   {10 20 30}
+  8   1 11 21   {10 20 30}
+} {
+  do_test tkt3718-4.$tn {
+    execsql { 
+      DELETE FROM t2;
+      INSERT INTO t2 SELECT a+5, b FROM t1;
+      INSERT INTO t2 SELECT a+15, b FROM t1;
+      INSERT INTO t2 SELECT a+25, b FROM t1;
+    }
+
+    catchsql "
+      BEGIN;
+      INSERT INTO t2 SELECT a+$i1, sql(a==3,
+          'INSERT INTO t2 SELECT a+$i2, sql(a==3, 
+             ''INSERT INTO t2 SELECT a+$i3, b FROM t1''
+           ) FROM t1'
+      ) FROM t1;
+    "
+
+    execsql { COMMIT }
+
+    execsql { SELECT a FROM t2 WHERE (a%5)==0 ORDER BY a+0}
+  } $results
+
+  do_test tkt3718-4.$tn.extra {
+    execsql {
+      SELECT 
+        (SELECT sum(a) FROM t2)==(SELECT sum(a*5-10) FROM t2 WHERE (a%5)==0)
+    }
+  } {1}
+
+  integrity_check tkt3718-4.$tn.integrity
+}
+
+
+finish_test

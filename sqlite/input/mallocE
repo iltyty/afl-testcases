@@ -1,0 +1,28 @@
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+source $testdir/malloc_common.tcl
+
+if {!$MEMDEBUG} {
+   puts "Skipping mallocE tests: not compiled with -DSQLITE_MEMDEBUG..."
+   finish_test
+   return
+}
+
+set PREP { 
+  PRAGMA page_size = 1024;
+  CREATE TABLE t1(a, b, c);
+  CREATE TABLE t2(x, y, z);
+}
+do_malloc_test mallocE-1 -sqlprep $PREP -sqlbody { 
+  SELECT p, q FROM (SELECT a+b AS p, b+c AS q FROM t1, t2 WHERE c>5)
+              LEFT JOIN t2 ON p=x;
+}
+
+do_malloc_test mallocE-2 -sqlprep $PREP -sqlbody { 
+  SELECT x, y2 FROM (SELECT a+b AS x, b+c AS y2 FROM t1, t2 WHERE c>5)
+              LEFT JOIN t2 USING(x) WHERE y2>11;
+}
+
+
+finish_test

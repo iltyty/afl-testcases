@@ -1,0 +1,183 @@
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+ifcapable !fts3 {
+  finish_test
+  return
+}
+
+db eval {
+  CREATE VIRTUAL TABLE t1 USING fts3(c);
+  INSERT INTO t1 (c) VALUES('this is a test');
+  INSERT INTO t1 (c) VALUES('that was a test');
+  INSERT INTO t1 (c) VALUES('this is fun');
+  DELETE FROM t1 WHERE c = 'that was a test';
+}
+
+do_test fts3b-1.1 {
+  execsql {
+    SELECT rowid FROM t1 WHERE c MATCH 'this';
+  }
+} {1 3}
+
+db eval {VACUUM}
+
+do_test fts3b-1.2 {
+  execsql {
+    SELECT rowid FROM t1 WHERE c MATCH 'this';
+  }
+} {1 3}
+
+set text {
+  Lorem ipsum dolor sit amet, consectetuer adipiscing elit. Maecenas
+  iaculis mollis ipsum. Praesent rhoncus placerat justo. Duis non quam
+  sed turpis posuere placerat. Curabitur et lorem in lorem porttitor
+  aliquet. Pellentesque bibendum tincidunt diam. Vestibulum blandit
+  ante nec elit. In sapien diam, facilisis eget, dictum sed, viverra
+  at, felis. Vestibulum magna. Sed magna dolor, vestibulum rhoncus,
+  ornare vel, vulputate sit amet, felis. Integer malesuada, tellus at
+  luctus gravida, diam nunc porta nibh, nec imperdiet massa metus eu
+  lectus. Aliquam nisi. Nunc fringilla nulla at lectus. Suspendisse
+  potenti. Cum sociis natoque penatibus et magnis dis parturient
+  montes, nascetur ridiculus mus. Pellentesque odio nulla, feugiat eu,
+  suscipit nec, consequat quis, risus.
+}
+append text $text
+
+db eval {CREATE VIRTUAL TABLE t2 USING fts3(c)}
+set res {}
+db eval {BEGIN}
+for {set ii 0} {$ii<10000} {incr ii} {
+  db eval {INSERT INTO t2 (c) VALUES ($text)}
+  lappend res [expr {$ii+1}]
+  if {($ii%500)==0} {
+    db eval {
+      COMMIT;
+      BEGIN;
+    }
+  }
+}
+db eval {COMMIT}
+
+do_test fts3b-2.1 {
+  execsql {
+    SELECT rowid FROM t2 WHERE c MATCH 'lorem';
+  }
+} $res
+
+db eval {VACUUM}
+
+do_test fts3b-2.2 {
+  execsql {
+    SELECT rowid FROM t2 WHERE c MATCH 'lorem';
+  }
+} $res
+
+
+db eval {
+  CREATE VIRTUAL TABLE t3 USING fts3(c);
+  INSERT INTO t3 (c) VALUES('this is a test');
+  INSERT INTO t3 (c) VALUES('that was a test');
+  INSERT INTO t3 (c) VALUES('this is fun');
+  DELETE FROM t3 WHERE c = 'that was a test';
+}
+
+do_test fts3b-3.1 {
+  execsql {
+    SELECT snippet(t3) FROM t3 WHERE t3 MATCH 'test';
+  }
+} {{this is a <b>test</b>}}
+
+do_test fts3b-3.2 {
+  execsql {
+    SELECT * FROM t3 WHERE rowid = 1;
+  }
+} {{this is a test}}
+
+do_test fts3b-3.3 {
+  execsql {
+    INSERT INTO t3 VALUES ('another test');
+  }
+} {}
+
+
+db eval {
+  CREATE VIRTUAL TABLE t4 USING fts3(c);
+  INSERT INTO t4 (c) VALUES('this is a test');
+  INSERT INTO t4 (c) VALUES('that was a test');
+  INSERT INTO t4 (c) VALUES('this is fun');
+  DELETE FROM t4 WHERE c = 'that was a test';
+}
+
+do_test fts3b-4.1 {
+  execsql {
+    SELECT rowid FROM t4 WHERE rowid <> docid;
+  }
+} {}
+
+do_test fts3b-4.2 {
+  execsql {
+    SELECT * FROM t4 WHERE rowid = 1;
+  }
+} {{this is a test}}
+
+do_test fts3b-4.3 {
+  execsql {
+    SELECT docid, * FROM t4 WHERE rowid = 1;
+  }
+} {1 {this is a test}}
+
+do_test fts3b-4.4 {
+  execsql {
+    SELECT docid, * FROM t4 WHERE docid = 1;
+  }
+} {1 {this is a test}}
+
+do_test fts3b-4.5 {
+  execsql {
+    INSERT INTO t4 VALUES ('another test');
+  }
+} {}
+
+do_test fts3b-4.6 {
+  execsql {
+    INSERT INTO t4 (docid, c) VALUES (10, 'yet another test');
+    SELECT * FROM t4 WHERE docid = 10;
+  }
+} {{yet another test}}
+
+do_test fts3b-4.7 {
+  execsql {
+    INSERT INTO t4 (docid, c) VALUES (12, 'still testing');
+    SELECT * FROM t4 WHERE docid = 12;
+  }
+} {{still testing}}
+
+do_test fts3b-4.8 {
+  catchsql {
+    INSERT INTO t4 (rowid, docid, c) VALUES (14, 15, 'bad test');
+    SELECT * FROM t4 WHERE docid = 14;
+  }
+} {1 {SQL logic error}}
+
+do_test fts3b-4.9 {
+  execsql { SELECT docid FROM t4 WHERE t4 MATCH 'testing' }
+} {12}
+do_test fts3b-4.10 {
+  execsql { 
+    UPDATE t4 SET docid = 14 WHERE docid = 12;
+    SELECT docid FROM t4 WHERE t4 MATCH 'testing';
+  }
+} {14}
+do_test fts3b-4.11 {
+  execsql { SELECT * FROM t4 WHERE rowid = 14; }
+} {{still testing}}
+do_test fts3b-4.12 {
+  execsql { SELECT * FROM t4 WHERE rowid = 12; }
+} {}
+do_test fts3b-4.13 {
+  execsql { SELECT docid FROM t4 WHERE t4 MATCH 'still'; }
+} {14}
+
+finish_test

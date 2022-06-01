@@ -1,0 +1,29 @@
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix bigsort
+
+if {[catch {exec free | grep Mem:} out] || [lindex $out 1]<8000000} {
+  finish_test
+  return
+}
+
+do_execsql_test 1.0 {
+  PRAGMA page_size = 1024;
+  CREATE TABLE t1(a, b);
+  BEGIN;
+  WITH data(x,y) AS (
+    SELECT 1, zeroblob(10000)
+    UNION ALL
+    SELECT x+1, y FROM data WHERE x < 300000
+  )
+  INSERT INTO t1 SELECT * FROM data;
+  COMMIT;
+}
+do_execsql_test 1.1 {
+  PRAGMA cache_size = 4194304;
+  CREATE INDEX i1 ON t1(a, b);
+}
+
+
+finish_test

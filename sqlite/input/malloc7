@@ -1,0 +1,31 @@
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+source $testdir/malloc_common.tcl
+
+if {!$MEMDEBUG} {
+   puts "Skipping malloc7 tests: not compiled with -DSQLITE_MEMDEBUG..."
+   finish_test
+   return
+}
+
+
+do_malloc_test malloc7-1 -sqlprep {
+  CREATE TABLE t1(a,b,c,d);
+  CREATE INDEX i1 ON t1(b,c);
+} -tclbody {
+  set sql16 [encoding convertto unicode "SELECT * FROM sqlite_master"]
+  append sql16 "\00\00"
+  set nbyte [string length $sql16]
+  set ::STMT [sqlite3_prepare16 db $sql16 $nbyte DUMMY]
+  sqlite3_finalize $::STMT
+} 
+
+
+do_test malloc-99.X {
+  catch {db close}
+  set sqlite_open_file_count
+} {0}
+
+puts open-file-count=$sqlite_open_file_count
+finish_test

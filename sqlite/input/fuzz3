@@ -1,0 +1,139 @@
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+database_may_be_corrupt
+test_set_config_pagecache 0 0
+
+
+expr srand(123)
+
+proc rstring {n} {
+  set str s
+  while {[string length $str] < $n} {
+    append str [expr rand()]
+  }
+  return [string range $str 0 $n]
+}
+
+proc rvalue {} {
+  switch -- [expr int(rand()*5)] {
+    0 { # SQL NULL value.
+      return NULL 
+    }
+    1 { # Integer value.
+      return [expr int(rand()*1024)] 
+    }
+    2 { # Real value.
+      return [expr rand()] 
+    }
+    3 { # String value.
+      set n [expr int(rand()*2500)]
+      return "'[rstring $n]'"
+    }
+    4 { # Blob value.
+      set n [expr int(rand()*2500)]
+      return "CAST('[rstring $n]' AS BLOB)"
+    }
+  }
+}
+
+proc db_checksum {} {
+  set    cksum [execsql { SELECT md5sum(a, b, c) FROM t1 }]
+  append cksum [execsql { SELECT md5sum(d, e, f) FROM t2 }]
+  set cksum
+}
+
+proc modify_database {iMod} {
+  set blob [binary format c [expr {$iMod&0xFF}]]
+  set offset [expr {$iMod>>8}]
+
+  set fd [open test.db r+]
+  fconfigure $fd -encoding binary -translation binary
+  seek $fd $offset
+  set old_blob [read $fd 1]
+  seek $fd $offset
+  puts -nonewline $fd $blob
+  close $fd
+
+  binary scan $old_blob c iOld
+  return [expr {($offset<<8) + ($iOld&0xFF)}]
+}
+
+proc purge_pcache {} {
+  ifcapable !memorymanage {
+    db close
+    sqlite3 db test.db
+  } else {
+    sqlite3_release_memory 10000000
+  }
+  if {[lindex [pcache_stats] 1] != 0} {
+    error "purge_pcache failed: [pcache_stats]"
+  }
+}
+
+do_test fuzz3-1 {
+  execsql {
+    BEGIN;
+    CREATE TABLE t1(a, b, c);
+    CREATE TABLE t2(d, e, f);
+    CREATE INDEX i1 ON t1(a, b, c);
+    CREATE INDEX i2 ON t2(d, e, f);
+  }
+  for {set i 0} {$i < 50} {incr i} {
+    execsql "INSERT INTO t1 VALUES([rvalue], [rvalue], [rvalue])"
+    execsql "INSERT INTO t2 VALUES([rvalue], [rvalue], [rvalue])"
+  }
+  execsql COMMIT
+} {}
+
+set ::cksum [db_checksum]
+do_test fuzz3-2 {
+  db_checksum
+} $::cksum
+
+for {set ii 0} {$ii < 5000} {incr ii} {
+  purge_pcache
+
+  # Randomly modify a single byte of the database file somewhere within
+  # the first 100KB of the file.
+  set iNew [expr int(rand()*5*1024*256)]
+  set iOld [modify_database $iNew]
+
+  set iTest 0
+  foreach sql {
+    {SELECT * FROM t2 ORDER BY d}      
+    {SELECT * FROM t1}                 
+    {SELECT * FROM t2}                 
+    {SELECT * FROM t1 ORDER BY a}      
+    {SELECT * FROM t1 WHERE a = (SELECT a FROM t1 WHERE rowid=25)} 
+    {SELECT * FROM t2 WHERE d = (SELECT d FROM t2 WHERE rowid=1)}  
+    {SELECT * FROM t2 WHERE d = (SELECT d FROM t2 WHERE rowid=50)} 
+    {PRAGMA integrity_check}           
+  } {
+    do_test fuzz3-$ii.$iNew.[incr iTest] {
+      foreach {rc msg} [catchsql $sql] {}
+      if {$rc == 0 
+       || $msg eq "database or disk is full"
+       || $msg eq "database disk image is malformed"
+       || $msg eq "file is not a database"
+       || [string match "malformed database schema*" $msg]
+      } {
+        set msg ok
+      }
+      set msg
+    } {ok}
+  }
+
+  # Restore the original database file content. Test that the correct 
+  # checksum is now returned.
+  #
+  purge_pcache
+  modify_database $iOld
+  do_test fuzz3-$ii.$iNew.[incr iTest] {
+    db_checksum
+  } $::cksum
+}
+
+test_restore_config_pagecache
+finish_test

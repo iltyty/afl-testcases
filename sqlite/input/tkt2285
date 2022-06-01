@@ -1,0 +1,42 @@
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+ifcapable !tempdb {
+  finish_test
+  return
+}
+
+do_test tkt2285-1.1 {
+  execsql {
+    PRAGMA locking_mode = EXCLUSIVE;
+  }
+  execsql {
+    BEGIN;
+    CREATE TABLE abc(a, b, c);
+    ROLLBACK;
+  }
+} {}
+
+do_test tkt2285-1.2 {
+  execsql {
+    SELECT * FROM sqlite_master;
+  }
+} {}
+
+ifcapable tempdb {
+  do_test tkt2285-2.1 {
+    execsql {
+      BEGIN;
+      CREATE TEMP TABLE abc(a, b, c);
+      ROLLBACK;
+    }
+  } {}
+  do_test tkt2285-2.2 {
+    execsql {
+      SELECT * FROM sqlite_temp_master;
+    }
+  } {}
+}
+
+finish_test

@@ -1,0 +1,152 @@
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+sqlite3_reset_auto_extension
+
+if {[permutation] == "memsubsys1"} {
+  finish_test
+  return
+}
+
+test_set_config_pagecache 0 0
+
+proc build_test_db {testname pragmas} {
+  catch {db close}
+  forcedelete test.db test.db-journal
+  sqlite3 db test.db
+  sqlite3_db_config_lookaside db 0 0 0
+  db eval $pragmas
+  db eval {
+    CREATE TABLE t1(x, y);
+    CREATE TABLE t2(a, b);
+    CREATE INDEX i1 ON t1(x,y);
+    INSERT INTO t1 VALUES(1, 100);
+    INSERT INTO t1 VALUES(2, 200);
+  }
+  for {set i 2} {$i<5000} {incr i $i} {
+    db eval {INSERT INTO t2 SELECT * FROM t1}
+    db eval {INSERT INTO t1 SELECT a+$i, a+b*100 FROM t2}
+    db eval {DELETE FROM t2}
+  }
+  do_test $testname.1 {
+    db eval {SELECT count(*) FROM t1}
+  } 8192
+  integrity_check $testname.2
+}
+
+proc reset_highwater_marks {} {
+  sqlite3_status SQLITE_STATUS_MEMORY_USED 1
+  sqlite3_status SQLITE_STATUS_MALLOC_SIZE 1
+  sqlite3_status SQLITE_STATUS_PAGECACHE_USED 1
+  sqlite3_status SQLITE_STATUS_PAGECACHE_OVERFLOW 1
+  sqlite3_status SQLITE_STATUS_PAGECACHE_SIZE 1
+  sqlite3_status SQLITE_STATUS_SCRATCH_USED 1
+  sqlite3_status SQLITE_STATUS_SCRATCH_OVERFLOW 1
+  sqlite3_status SQLITE_STATUS_SCRATCH_SIZE 1
+  sqlite3_status SQLITE_STATUS_PARSER_STACK 1
+}
+
+set xtra_size 290
+
+db close
+sqlite3_shutdown
+sqlite3_config_lookaside 0 0
+sqlite3_config_pagecache 0 0
+sqlite3_initialize
+reset_highwater_marks
+build_test_db memsubsys1-1 {PRAGMA page_size=1024}
+do_test memsubsys1-1.3 {
+  set pg_used [lindex [sqlite3_status SQLITE_STATUS_PAGECACHE_USED 0] 2]
+} 0
+do_test memsubsys1-1.4 {
+  set s_used [lindex [sqlite3_status SQLITE_STATUS_SCRATCH_USED 0] 2]
+} 0
+set max_pagecache [lindex [sqlite3_status SQLITE_STATUS_PAGECACHE_OVERFLOW 0] 2]
+
+db close
+sqlite3_shutdown
+sqlite3_config_pagecache [expr 1024+$xtra_size] 20
+sqlite3_initialize
+reset_highwater_marks
+build_test_db memsubsys1-2 {PRAGMA page_size=1024; PRAGMA mmap_size=0}
+set MEMORY_MANAGEMENT $sqlite_options(memorymanage)
+ifcapable pagecache_overflow_stats {
+  ifcapable !malloc_usable_size {
+    do_test memsubsys1-2.3 {
+      set pg_ovfl [lindex [sqlite3_status SQLITE_STATUS_PAGECACHE_OVERFLOW 0] 2]
+    } [expr ($TEMP_STORE>1 || $MEMORY_MANAGEMENT==0)*1024]
+  }
+}
+do_test memsubsys1-2.4 {
+  set pg_used [lindex [sqlite3_status SQLITE_STATUS_PAGECACHE_USED 0] 2]
+} 20
+do_test memsubsys1-2.5 {
+  set s_used [lindex [sqlite3_status SQLITE_STATUS_SCRATCH_USED 0] 2]
+} 0
+
+db close
+sqlite3_shutdown
+sqlite3_config_pagecache [expr 512+$xtra_size] 20
+sqlite3_config singlethread
+sqlite3_initialize
+reset_highwater_marks
+build_test_db memsubsys1-3.1 {PRAGMA page_size=1024}
+do_test memsubsys1-3.1.3 {
+  set pg_used [lindex [sqlite3_status SQLITE_STATUS_PAGECACHE_USED 0] 2]
+} 0
+do_test memsubsys1-3.1.4 {
+  set overflow [lindex [sqlite3_status SQLITE_STATUS_PAGECACHE_OVERFLOW 0] 2]
+  # Note:  The measured PAGECACHE_OVERFLOW is amount malloc() returns, not what
+  # was requested.  System malloc() implementations might (arbitrarily) return
+  # slightly different oversize buffers, which can result in slightly different
+  # PAGECACHE_OVERFLOW sizes between consecutive runs.  So we cannot do an
+  # exact comparison.  Simply verify that the amount is within 5%.
+  expr {$overflow>=$max_pagecache*0.95 && $overflow<=$max_pagecache*1.05}
+} 1
+do_test memsubsys1-3.1.5 {
+  set s_used [lindex [sqlite3_status SQLITE_STATUS_SCRATCH_USED 0] 2]
+} 0
+db close
+sqlite3_shutdown
+sqlite3_config_pagecache [expr 2048+$xtra_size] 20
+sqlite3_initialize
+reset_highwater_marks
+build_test_db memsubsys1-3.2 {PRAGMA page_size=2048}
+do_test memsubsys1-3.2.3 {
+  db eval {PRAGMA page_size}
+} 2048
+do_test memsubsys1-3.2.4 {
+  set pg_used [lindex [sqlite3_status SQLITE_STATUS_PAGECACHE_USED 0] 2]
+} 20
+do_test memsubsys1-3.2.5 {
+  set s_used [lindex [sqlite3_status SQLITE_STATUS_SCRATCH_USED 0] 2]
+} 0
+
+db close
+sqlite3_shutdown
+sqlite3_config_pagecache [expr 1024+$xtra_size] 50
+sqlite3_initialize
+reset_highwater_marks
+build_test_db memsubsys1-4 {PRAGMA page_size=1024}
+do_test memsubsys1-4.3 {
+  set pg_used [lindex [sqlite3_status SQLITE_STATUS_PAGECACHE_USED 0] 2]
+  expr {$pg_used>=45 && $pg_used<=50}
+} 1
+do_test memsubsys1-4.4 {
+  set pg_ovfl [lindex [sqlite3_status SQLITE_STATUS_PAGECACHE_OVERFLOW 0] 2]
+} 0
+do_test memsubsys1-4.5 {
+  set maxreq [lindex [sqlite3_status SQLITE_STATUS_MALLOC_SIZE 0] 2]
+  expr {$maxreq<7000}
+} 1
+
+db close
+sqlite3_shutdown
+sqlite3_config_memstatus 1
+sqlite3_config_lookaside 100 500
+sqlite3_config serialized
+sqlite3_initialize
+autoinstall_test_functions
+
+test_restore_config_pagecache
+finish_test

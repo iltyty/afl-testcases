@@ -1,0 +1,42 @@
+
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+if {$tcl_platform(platform)=="windows"
+ || [atomic_batch_write test.db]
+} {
+  finish_test
+  return
+}
+
+do_test journal1-1.1 {
+  execsql {
+    CREATE TABLE t1(a,b);
+    INSERT INTO t1 VALUES(1,randstr(10,400));
+    INSERT INTO t1 VALUES(2,randstr(10,400));
+    INSERT INTO t1 SELECT a+2, a||b FROM t1;
+    INSERT INTO t1 SELECT a+4, a||b FROM t1;
+    SELECT count(*) FROM t1;
+  }
+} 8
+
+do_test journal1-1.2 {
+  execsql {
+    BEGIN;
+    DELETE FROM t1;
+  }
+  forcecopy test.db-journal test.db-journal-bu
+  execsql {
+    ROLLBACK;
+  }
+  db close
+  delete_file test.db
+  copy_file test.db-journal-bu test.db-journal
+  sqlite3 db test.db
+  catchsql {
+    SELECT * FROM sqlite_master
+  }
+} {0 {}}
+
+finish_test

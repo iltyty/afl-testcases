@@ -1,0 +1,9 @@
+
+set testdir [file dirname $argv0]
+source $testdir/permutations.test
+
+ifcapable fts3 {
+  run_test_suite fts3
+}
+
+finish_test

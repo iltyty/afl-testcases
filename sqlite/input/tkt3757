@@ -1,0 +1,32 @@
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+proc count_steps {sql} {
+  set r [db eval $sql]
+  lappend r scan [db status step] sort [db status sort]
+}
+
+do_test tkt3757-1.1 {
+  db eval {
+     CREATE TABLE t1(x INTEGER, y INTEGER, z TEXT);
+     CREATE INDEX t1i1 ON t1(y,z);
+     INSERT INTO t1 VALUES(1,2,'three');
+     CREATE TABLE t2(a INTEGER, b TEXT);
+     INSERT INTO t2 VALUES(2, 'two');
+     ANALYZE;
+     SELECT * FROM sqlite_stat1 ORDER BY 1, 2;
+  }
+} {t1 t1i1 {1 1 1} t2 {} 1}
+
+do_test tkt3757-1.2 {
+  db eval {
+    DELETE FROM sqlite_stat1;
+    INSERT INTO sqlite_stat1 VALUES('t1','t1i1','250000 50000 30');
+  }
+  count_steps {
+    SELECT * FROM t1 WHERE y IN (SELECT a FROM t2)
+  }
+} {1 2 three scan 0 sort 0}
+
+finish_test

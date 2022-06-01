@@ -1,0 +1,25 @@
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+do_test tkt3761-1.1 {
+  db close
+  sqlite3 db :memory:
+  db eval {
+    PRAGMA auto_vacuum=INCREMENTAL;
+    CREATE TABLE t1(x);
+    INSERT INTO t1 VALUES(zeroblob(900));
+    INSERT INTO t1 VALUES(zeroblob(900));
+    INSERT INTO t1 SELECT x FROM t1;
+    INSERT INTO t1 SELECT x FROM t1;
+    INSERT INTO t1 SELECT x FROM t1;
+    INSERT INTO t1 SELECT x FROM t1;
+    BEGIN;
+    DELETE FROM t1 WHERE rowid%2;
+    PRAGMA incremental_vacuum(4);
+    ROLLBACK;
+  }
+  db eval {PRAGMA integrity_check}
+} {ok}
+
+finish_test

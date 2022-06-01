@@ -1,0 +1,36 @@
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+do_test tkt3918.1 {
+  execsql {
+    PRAGMA page_size = 1024;
+    PRAGMA auto_vacuum = incremental;
+    CREATE TABLE t1(i, x);
+  }
+} {}
+do_test tkt3918.2 {
+  execsql {
+    INSERT INTO t1 VALUES(1, randstr(1000,1000));
+    INSERT INTO t1 VALUES(2, zeroblob(248*1020 + 100));
+    INSERT INTO t1 VALUES(3, zeroblob(2*1020 + 100));
+  }
+} {}
+
+do_test tkt3918.3 {
+  execsql {
+    DELETE FROM t1 WHERE i = 2;
+    DELETE FROM t1 WHERE i = 1;
+    DELETE FROM t1 WHERE i = 3;
+  }
+} {}
+
+do_test tkt3918.4 {
+  execsql { PRAGMA incremental_vacuum = 1 }
+} {}
+
+do_test tkt3918.5 {
+  execsql { CREATE TABLE t2(a, b) }
+} {}
+
+finish_test

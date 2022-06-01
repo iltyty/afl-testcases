@@ -1,0 +1,736 @@
+package require Tcl 8.6
+
+proc wapp {txt} {
+  global wapp
+  dict append wapp .reply $txt
+}
+
+proc wapp-unsafe {txt} {
+  global wapp
+  dict append wapp .reply $txt
+}
+
+if {$tcl_version>=8.7} {
+  proc wapp-subst {txt} {
+    global wapp
+    regsub -all -command \
+       {%(html|url|qp|string|unsafe){1,1}?(|%)\((.+)\)\2} $txt wappInt-enc txt
+    dict append wapp .reply [subst -novariables -nocommand $txt]
+  }
+  proc wapp-trim {txt} {
+    global wapp
+    regsub -all {\n\s+} [string trim $txt] \n txt
+    regsub -all -command \
+       {%(html|url|qp|string|unsafe){1,1}?(|%)\((.+)\)\2} $txt wappInt-enc txt
+    dict append wapp .reply [subst -novariables -nocommand $txt]
+  }
+  proc wappInt-enc {all mode nu1 txt} {
+    return [uplevel 2 "wappInt-enc-$mode \"$txt\""]
+  }
+} else {
+  proc wapp-subst {txt} {
+    global wapp
+    regsub -all {%(html|url|qp|string|unsafe){1,1}?(|%)\((.+)\)\2} $txt \
+           {[wappInt-enc-\1 "\3"]} txt
+    dict append wapp .reply [uplevel 1 [list subst -novariables $txt]]
+  }
+  proc wapp-trim {txt} {
+    global wapp
+    regsub -all {\n\s+} [string trim $txt] \n txt
+    regsub -all {%(html|url|qp|string|unsafe){1,1}?(|%)\((.+)\)\2} $txt \
+           {[wappInt-enc-\1 "\3"]} txt
+    dict append wapp .reply [uplevel 1 [list subst -novariables $txt]]
+  }
+}
+
+proc wappInt-enc-html {txt} {
+  return [string map {& &amp; < &lt; > &gt; \" &quot; \\ &#92;} $txt]
+}
+proc wappInt-enc-unsafe {txt} {
+  return $txt
+}
+proc wappInt-enc-url {s} {
+  if {[regsub -all {[^-{}@~?=#_.:/a-zA-Z0-9]} $s {[wappInt-%HHchar {&}]} s]} {
+    set s [subst -novar -noback $s]
+  }
+  if {[regsub -all {[{}]} $s {[wappInt-%HHchar \\&]} s]} {
+    set s [subst -novar -noback $s]
+  }
+  return $s
+}
+proc wappInt-enc-qp {s} {
+  if {[regsub -all {[^-{}_.a-zA-Z0-9]} $s {[wappInt-%HHchar {&}]} s]} {
+    set s [subst -novar -noback $s]
+  }
+  if {[regsub -all {[{}]} $s {[wappInt-%HHchar \\&]} s]} {
+    set s [subst -novar -noback $s]
+  }
+  return $s
+}
+proc wappInt-enc-string {s} {
+  return [string map {\\ \\\\ \" \\\" ' \\' < \\u003c} $s]
+}
+
+proc wappInt-%HHchar {c} {
+  if {$c==" "} {return +}
+  return [regsub -all .. [binary encode hex [encoding convertto utf-8 $c]] {%&}]
+}
+
+
+proc wappInt-decode-url {str} {
+  set str [string map [list + { } "\\" "\\\\" \[ \\\[ \] \\\]] $str]
+  regsub -all -- \
+      {%([Ee][A-Fa-f0-9])%([89ABab][A-Fa-f0-9])%([89ABab][A-Fa-f0-9])} \
+      $str {[encoding convertfrom utf-8 [binary decode hex \1\2\3]]} str
+  regsub -all -- \
+      {%([CDcd][A-Fa-f0-9])%([89ABab][A-Fa-f0-9])}                     \
+      $str {[encoding convertfrom utf-8 [binary decode hex \1\2]]} str
+  regsub -all -- {%([0-7][A-Fa-f0-9])} $str {\\u00\1} str
+  return [subst -novar $str]
+}
+
+proc wapp-reset {} {
+  global wapp
+  dict set wapp .reply {}
+}
+
+proc wapp-mimetype {x} {
+  global wapp
+  dict set wapp .mimetype $x
+}
+
+proc wapp-reply-code {x} {
+  global wapp
+  dict set wapp .reply-code $x
+}
+
+proc wapp-set-cookie {name value} {
+  global wapp
+  dict lappend wapp .new-cookies $name $value
+}
+
+proc wapp-clear-cookie {name} {
+  wapp-set-cookie $name {}
+}
+
+proc wapp-reply-extra {name value} {
+  global wapp
+  dict lappend wapp .reply-extra $name $value
+}
+
+proc wapp-cache-control {x} {
+  wapp-reply-extra Cache-Control $x
+}
+
+proc wapp-redirect {uri} {
+  wapp-reply-code {307 Redirect}
+  wapp-reply-extra Location $uri
+}
+
+proc wapp-param {name {dflt {}}} {
+  global wapp
+  if {![dict exists $wapp $name]} {return $dflt}
+  return [dict get $wapp $name]
+}
+
+proc wapp-param-exists {name} {
+  global wapp
+  return [dict exists $wapp $name]
+}
+
+proc wapp-set-param {name value} {
+  global wapp
+  dict set wapp $name $value
+}
+
+proc wapp-param-list {{glob {*}}} {
+  global wapp
+  return [dict keys $wapp $glob]
+}
+
+proc wapp-allow-xorigin-params {} {
+  global wapp
+  if {![dict exists $wapp .qp] && ![dict get $wapp SAME_ORIGIN]} {
+    wappInt-decode-query-params
+  }
+}
+
+proc wapp-content-security-policy {val} {
+  global wapp
+  if {$val=="off"} {
+    dict unset wapp .csp
+  } else {
+    dict set wapp .csp $val
+  }
+}
+
+proc wapp-safety-check {} {
+  set res {}
+  foreach p [info procs] {
+    set ln 0
+    foreach x [split [info body $p] \n] {
+      incr ln
+      if {[regexp {^[ \t]*wapp[ \t]+([^\n]+)} $x all tail]
+       && [string index $tail 0]!="\173"
+       && [regexp {[[$]} $tail]
+      } {
+        append res "$p:$ln: unsafe \"wapp\" call: \"[string trim $x]\"\n"
+      }
+      if {[regexp {^[ \t]*wapp-(subst|trim)[ \t]+[^\173]} $x all cx]} {
+        append res "$p:$ln: unsafe \"wapp-$cx\" call: \"[string trim $x]\"\n"
+      }
+    }
+  }
+  return $res
+}
+
+proc wapp-debug-env {} {
+  global wapp
+  set out {}
+  foreach var [lsort [dict keys $wapp]] {
+    if {[string index $var 0]=="."} continue
+    append out "$var = [list [dict get $wapp $var]]\n"
+  }
+  append out "\[pwd\] = [list [pwd]]\n"
+  return $out
+}
+
+proc wappInt-trace {} {}
+
+proc wappInt-start-listener {port wappmode fromip} {
+  if {[string match *scgi $wappmode]} {
+    set type SCGI
+    set server [list wappInt-new-connection \
+                wappInt-scgi-readable $wappmode $fromip]
+  } else {
+    set type HTTP
+    set server [list wappInt-new-connection \
+                wappInt-http-readable $wappmode $fromip]
+  }
+  if {$wappmode=="local" || $wappmode=="scgi"} {
+    set x [socket -server $server -myaddr 127.0.0.1 $port]
+  } else {
+    set x [socket -server $server $port]
+  }
+  set coninfo [chan configure $x -sockname]
+  set port [lindex $coninfo 2]
+  if {$wappmode=="local"} {
+    wappInt-start-browser http://127.0.0.1:$port/
+  } elseif {$fromip!=""} {
+    puts "Listening for $type requests on TCP port $port from IP $fromip"
+  } else {
+    puts "Listening for $type requests on TCP port $port"
+  }
+}
+
+proc wappInt-start-browser {url} {
+  global tcl_platform
+  if {$tcl_platform(platform)=="windows"} {
+    exec cmd /c start $url &
+  } elseif {$tcl_platform(os)=="Darwin"} {
+    exec open $url &
+  } elseif {[catch {exec xdg-open $url}]} {
+    exec firefox $url &
+  }
+}
+
+proc wappInt-new-connection {callback wappmode fromip chan ip port} {
+  upvar #0 wappInt-$chan W
+  if {$fromip!="" && ![string match $fromip $ip]} {
+    close $chan
+    return
+  }
+  set W [dict create REMOTE_ADDR $ip REMOTE_PORT $port WAPP_MODE $wappmode \
+         .header {}]
+  fconfigure $chan -blocking 0 -translation binary
+  fileevent $chan readable [list $callback $chan]
+}
+
+proc wappInt-close-channel {chan} {
+  if {$chan=="stdout"} {
+    # This happens after completing a CGI request
+    exit 0
+  } else {
+    unset ::wappInt-$chan
+    close $chan
+  }
+}
+
+proc wappInt-http-readable {chan} {
+  if {[catch [list wappInt-http-readable-unsafe $chan] msg]} {
+    puts stderr "$msg\n$::errorInfo"
+    wappInt-close-channel $chan
+  }
+}
+proc wappInt-http-readable-unsafe {chan} {
+  upvar #0 wappInt-$chan W wapp wapp
+  if {![dict exists $W .toread]} {
+    # If the .toread key is not set, that means we are still reading
+    # the header
+    set line [string trimright [gets $chan]]
+    set n [string length $line]
+    if {$n>0} {
+      if {[dict get $W .header]=="" || [regexp {^\s+} $line]} {
+        dict append W .header $line
+      } else {
+        dict append W .header \n$line
+      }
+      if {[string length [dict get $W .header]]>100000} {
+        error "HTTP request header too big - possible DOS attack"
+      }
+    } elseif {$n==0} {
+      # We have reached the blank line that terminates the header.
+      global argv0
+      set a0 [file normalize $argv0]
+      dict set W SCRIPT_FILENAME $a0
+      dict set W DOCUMENT_ROOT [file dir $a0]
+      if {[wappInt-parse-header $chan]} {
+        catch {close $chan}
+        return
+      }
+      set len 0
+      if {[dict exists $W CONTENT_LENGTH]} {
+        set len [dict get $W CONTENT_LENGTH]
+      }
+      if {$len>0} {
+        # Still need to read the query content
+        dict set W .toread $len
+      } else {
+        # There is no query content, so handle the request immediately
+        set wapp $W
+        wappInt-handle-request $chan 0
+      }
+    }
+  } else {
+    # If .toread is set, that means we are reading the query content.
+    # Continue reading until .toread reaches zero.
+    set got [read $chan [dict get $W .toread]]
+    dict append W CONTENT $got
+    dict set W .toread [expr {[dict get $W .toread]-[string length $got]}]
+    if {[dict get $W .toread]<=0} {
+      # Handle the request as soon as all the query content is received
+      set wapp $W
+      wappInt-handle-request $chan 0
+    }
+  }
+}
+
+proc wappInt-parse-header {chan} {
+  upvar #0 wappInt-$chan W
+  set hdr [split [dict get $W .header] \n]
+  if {$hdr==""} {return 1}
+  set req [lindex $hdr 0]
+  dict set W REQUEST_METHOD [set method [lindex $req 0]]
+  if {[lsearch {GET HEAD POST} $method]<0} {
+    error "unsupported request method: \"[dict get $W REQUEST_METHOD]\""
+  }
+  set uri [lindex $req 1]
+  set split_uri [split $uri ?]
+  set uri0 [lindex $split_uri 0]
+  if {![regexp {^/[-.a-z0-9_/]*$} $uri0]} {
+    error "invalid request uri: \"$uri0\""
+  }
+  dict set W REQUEST_URI $uri0
+  dict set W PATH_INFO $uri0
+  set uri1 [lindex $split_uri 1]
+  dict set W QUERY_STRING $uri1
+  set n [llength $hdr]
+  for {set i 1} {$i<$n} {incr i} {
+    set x [lindex $hdr $i]
+    if {![regexp {^(.+): +(.*)$} $x all name value]} {
+      error "invalid header line: \"$x\""
+    }
+    set name [string toupper $name]
+    switch -- $name {
+      REFERER {set name HTTP_REFERER}
+      USER-AGENT {set name HTTP_USER_AGENT}
+      CONTENT-LENGTH {set name CONTENT_LENGTH}
+      CONTENT-TYPE {set name CONTENT_TYPE}
+      HOST {set name HTTP_HOST}
+      COOKIE {set name HTTP_COOKIE}
+      ACCEPT-ENCODING {set name HTTP_ACCEPT_ENCODING}
+      default {set name .hdr:$name}
+    }
+    dict set W $name $value
+  }
+  return 0
+}
+
+proc wappInt-decode-query-params {} {
+  global wapp
+  dict set wapp .qp 1
+  if {[dict exists $wapp QUERY_STRING]} {
+    foreach qterm [split [dict get $wapp QUERY_STRING] &] {
+      set qsplit [split $qterm =]
+      set nm [lindex $qsplit 0]
+      if {[regexp {^[a-z][a-z0-9]*$} $nm]} {
+        dict set wapp $nm [wappInt-decode-url [lindex $qsplit 1]]
+      }
+    }
+  }
+  if {[dict exists $wapp CONTENT_TYPE] && [dict exists $wapp CONTENT]} {
+    set ctype [dict get $wapp CONTENT_TYPE]
+    if {$ctype=="application/x-www-form-urlencoded"} {
+      foreach qterm [split [string trim [dict get $wapp CONTENT]] &] {
+        set qsplit [split $qterm =]
+        set nm [lindex $qsplit 0]
+        if {[regexp {^[a-z][-a-z0-9_]*$} $nm]} {
+          dict set wapp $nm [wappInt-decode-url [lindex $qsplit 1]]
+        }
+      }
+    } elseif {[string match multipart/form-data* $ctype]} {
+      regexp {^(.*?)\r\n(.*)$} [dict get $wapp CONTENT] all divider body
+      set ndiv [string length $divider]
+      while {[string length $body]} {
+        set idx [string first $divider $body]
+        set unit [string range $body 0 [expr {$idx-3}]]
+        set body [string range $body [expr {$idx+$ndiv+2}] end]
+        if {[regexp {^Content-Disposition: form-data; (.*?)\r\n\r\n(.*)$} \
+             $unit unit hdr content]} {
+          if {[regexp {name="(.*)"; filename="(.*)"\r\nContent-Type: (.*?)$}\
+                $hdr hr name filename mimetype]} {
+            dict set wapp $name.filename \
+              [string map [list \\\" \" \\\\ \\] $filename]
+            dict set wapp $name.mimetype $mimetype
+            dict set wapp $name.content $content
+          } elseif {[regexp {name="(.*)"} $hdr hr name]} {
+            dict set wapp $name $content
+          }
+        }
+      }
+    }
+  }
+}
+
+proc wappInt-handle-request {chan useCgi} {
+  global wapp
+  dict set wapp .reply {}
+  dict set wapp .mimetype {text/html; charset=utf-8}
+  dict set wapp .reply-code {200 Ok}
+  dict set wapp .csp {default-src 'self'}
+
+  # Set up additional CGI environment values
+  #
+  if {![dict exists $wapp HTTP_HOST]} {
+    dict set wapp BASE_URL {}
+  } elseif {[dict exists $wapp HTTPS]} {
+    dict set wapp BASE_URL https://[dict get $wapp HTTP_HOST]
+  } else {
+    dict set wapp BASE_URL http://[dict get $wapp HTTP_HOST]
+  }
+  if {![dict exists $wapp REQUEST_URI]} {
+    dict set wapp REQUEST_URI /
+  } elseif {[regsub {\?.*} [dict get $wapp REQUEST_URI] {} newR]} {
+    # Some servers (ex: nginx) append the query parameters to REQUEST_URI.
+    # These need to be stripped off
+    dict set wapp REQUEST_URI $newR
+  }
+  if {[dict exists $wapp SCRIPT_NAME]} {
+    dict append wapp BASE_URL [dict get $wapp SCRIPT_NAME]
+  } else {
+    dict set wapp SCRIPT_NAME {}
+  }
+  if {![dict exists $wapp PATH_INFO]} {
+    # If PATH_INFO is missing (ex: nginx) then construct it
+    set URI [dict get $wapp REQUEST_URI]
+    set skip [string length [dict get $wapp SCRIPT_NAME]]
+    dict set wapp PATH_INFO [string range $URI $skip end]
+  }
+  if {[regexp {^/([^/]+)(.*)$} [dict get $wapp PATH_INFO] all head tail]} {
+    dict set wapp PATH_HEAD $head
+    dict set wapp PATH_TAIL [string trimleft $tail /]
+  } else {
+    dict set wapp PATH_INFO {}
+    dict set wapp PATH_HEAD {}
+    dict set wapp PATH_TAIL {}
+  }
+  dict set wapp SELF_URL [dict get $wapp BASE_URL]/[dict get $wapp PATH_HEAD]
+
+  # Parse query parameters from the query string, the cookies, and
+  # POST data
+  #
+  if {[dict exists $wapp HTTP_COOKIE]} {
+    foreach qterm [split [dict get $wapp HTTP_COOKIE] {;}] {
+      set qsplit [split [string trim $qterm] =]
+      set nm [lindex $qsplit 0]
+      if {[regexp {^[a-z][-a-z0-9_]*$} $nm]} {
+        dict set wapp $nm [wappInt-decode-url [lindex $qsplit 1]]
+      }
+    }
+  }
+  set same_origin 0
+  if {[dict exists $wapp HTTP_REFERER]} {
+    set referer [dict get $wapp HTTP_REFERER]
+    set base [dict get $wapp BASE_URL]
+    if {$referer==$base || [string match $base/* $referer]} {
+      set same_origin 1
+    }
+  }
+  dict set wapp SAME_ORIGIN $same_origin
+  if {$same_origin} {
+    wappInt-decode-query-params
+  }
+
+  # Invoke the application-defined handler procedure for this page
+  # request.  If an error occurs while running that procedure, generate
+  # an HTTP reply that contains the error message.
+  #
+  wapp-before-dispatch-hook
+  wappInt-trace
+  set mname [dict get $wapp PATH_HEAD]
+  if {[catch {
+    if {$mname!="" && [llength [info proc wapp-page-$mname]]>0} {
+      wapp-page-$mname
+    } else {
+      wapp-default
+    }
+  } msg]} {
+    if {[wapp-param WAPP_MODE]=="local" || [wapp-param WAPP_MODE]=="server"} {
+      puts "ERROR: $::errorInfo"
+    }
+    wapp-reset
+    wapp-reply-code "500 Internal Server Error"
+    wapp-mimetype text/html
+    wapp-trim {
+      <h1>Wapp Application Error</h1>
+      <pre>%html($::errorInfo)</pre>
+    }
+    dict unset wapp .new-cookies
+  }
+
+  # Transmit the HTTP reply
+  #
+  if {$chan=="stdout"} {
+    puts $chan "Status: [dict get $wapp .reply-code]\r"
+  } else {
+    puts $chan "HTTP/1.1 [dict get $wapp .reply-code]\r"
+    puts $chan "Server: wapp\r"
+    puts $chan "Connection: close\r"
+  }
+  if {[dict exists $wapp .reply-extra]} {
+    foreach {name value} [dict get $wapp .reply-extra] {
+      puts $chan "$name: $value\r"
+    }
+  }
+  if {[dict exists $wapp .csp]} {
+    puts $chan "Content-Security-Policy: [dict get $wapp .csp]\r"
+  }
+  set mimetype [dict get $wapp .mimetype]
+  puts $chan "Content-Type: $mimetype\r"
+  if {[dict exists $wapp .new-cookies]} {
+    foreach {nm val} [dict get $wapp .new-cookies] {
+      if {[regexp {^[a-z][-a-z0-9_]*$} $nm]} {
+        if {$val==""} {
+          puts $chan "Set-Cookie: $nm=; HttpOnly; Path=/; Max-Age=1\r"
+        } else {
+          set val [wappInt-enc-url $val]
+          puts $chan "Set-Cookie: $nm=$val; HttpOnly; Path=/\r"
+        }
+      }
+    }
+  }
+  if {[string match text/* $mimetype]} {
+    set reply [encoding convertto utf-8 [dict get $wapp .reply]]
+    if {[regexp {\ygzip\y} [wapp-param HTTP_ACCEPT_ENCODING]]} {
+      catch {
+        set x [zlib gzip $reply]
+        set reply $x
+        puts $chan "Content-Encoding: gzip\r"
+      }
+    }
+  } else {
+    set reply [dict get $wapp .reply]
+  }
+  puts $chan "Content-Length: [string length $reply]\r"
+  puts $chan \r
+  puts -nonewline $chan $reply
+  flush $chan
+  wappInt-close-channel $chan
+}
+
+proc wapp-before-dispatch-hook {} {return}
+
+proc wappInt-handle-cgi-request {} {
+  global wapp env
+  foreach key {
+    CONTENT_LENGTH
+    CONTENT_TYPE
+    DOCUMENT_ROOT
+    HTTP_ACCEPT_ENCODING
+    HTTP_COOKIE
+    HTTP_HOST
+    HTTP_REFERER
+    HTTP_USER_AGENT
+    HTTPS
+    PATH_INFO
+    QUERY_STRING
+    REMOTE_ADDR
+    REQUEST_METHOD
+    REQUEST_URI
+    REMOTE_USER
+    SCRIPT_FILENAME
+    SCRIPT_NAME
+    SERVER_NAME
+    SERVER_PORT
+    SERVER_PROTOCOL
+  } {
+    if {[info exists env($key)]} {
+      dict set wapp $key $env($key)
+    }
+  }
+  set len 0
+  if {[dict exists $wapp CONTENT_LENGTH]} {
+    set len [dict get $wapp CONTENT_LENGTH]
+  }
+  if {$len>0} {
+    fconfigure stdin -translation binary
+    dict set wapp CONTENT [read stdin $len]
+  }
+  dict set wapp WAPP_MODE cgi
+  fconfigure stdout -translation binary
+  wappInt-handle-request stdout 1
+}
+
+proc wappInt-scgi-readable {chan} {
+  if {[catch [list wappInt-scgi-readable-unsafe $chan] msg]} {
+    puts stderr "$msg\n$::errorInfo"
+    wappInt-close-channel $chan
+  }
+}
+proc wappInt-scgi-readable-unsafe {chan} {
+  upvar #0 wappInt-$chan W wapp wapp
+  if {![dict exists $W .toread]} {
+    # If the .toread key is not set, that means we are still reading
+    # the header.
+    #
+    # An SGI header is short.  This implementation assumes the entire
+    # header is available all at once.
+    #
+    dict set W .remove_addr [dict get $W REMOTE_ADDR]
+    set req [read $chan 15]
+    set n [string length $req]
+    scan $req %d:%s len hdr
+    incr len [string length "$len:,"]
+    append hdr [read $chan [expr {$len-15}]]
+    foreach {nm val} [split $hdr \000] {
+      if {$nm==","} break
+      dict set W $nm $val
+    }
+    set len 0
+    if {[dict exists $W CONTENT_LENGTH]} {
+      set len [dict get $W CONTENT_LENGTH]
+    }
+    if {$len>0} {
+      # Still need to read the query content
+      dict set W .toread $len
+    } else {
+      # There is no query content, so handle the request immediately
+      dict set W SERVER_ADDR [dict get $W .remove_addr]
+      set wapp $W
+      wappInt-handle-request $chan 0
+    }
+  } else {
+    # If .toread is set, that means we are reading the query content.
+    # Continue reading until .toread reaches zero.
+    set got [read $chan [dict get $W .toread]]
+    dict append W CONTENT $got
+    dict set W .toread [expr {[dict get $W .toread]-[string length $got]}]
+    if {[dict get $W .toread]<=0} {
+      # Handle the request as soon as all the query content is received
+      dict set W SERVER_ADDR [dict get $W .remove_addr]
+      set wapp $W
+      wappInt-handle-request $chan 0
+    }
+  }
+}
+
+proc wapp-start {arglist} {
+  global env
+  set mode auto
+  set port 0
+  set nowait 0
+  set fromip {}
+  set n [llength $arglist]
+  for {set i 0} {$i<$n} {incr i} {
+    set term [lindex $arglist $i]
+    if {[string match --* $term]} {set term [string range $term 1 end]}
+    switch -glob -- $term {
+      -server {
+        incr i;
+        set mode "server"
+        set port [lindex $arglist $i]
+      }
+      -local {
+        incr i;
+        set mode "local"
+        set fromip 127.0.0.1
+        set port [lindex $arglist $i]
+      }
+      -scgi {
+        incr i;
+        set mode "scgi"
+        set fromip 127.0.0.1
+        set port [lindex $arglist $i]
+      }
+      -remote-scgi {
+        incr i;
+        set mode "remote-scgi"
+        set port [lindex $arglist $i]
+      }
+      -cgi {
+        set mode "cgi"
+      }
+      -fromip {
+        incr i
+        set fromip [lindex $arglist $i]
+      }
+      -nowait {
+        set nowait 1
+      }
+      -trace {
+        proc wappInt-trace {} {
+          set q [wapp-param QUERY_STRING]
+          set uri [wapp-param BASE_URL][wapp-param PATH_INFO]
+          if {$q!=""} {append uri ?$q}
+          puts $uri
+        }
+      }
+      -lint {
+        set res [wapp-safety-check]
+        if {$res!=""} {
+          puts "Potential problems in this code:"
+          puts $res
+          exit 1
+        } else {
+          exit
+        }
+      }
+      -D*=* {
+        if {[regexp {^.D([^=]+)=(.*)$} $term all var val]} {
+          set ::$var $val
+        }
+      }
+      default {
+        error "unknown option: $term"
+      }
+    }
+  }
+  if {$mode=="auto"} {
+    if {[info exists env(GATEWAY_INTERFACE)]
+        && [string match CGI/1.* $env(GATEWAY_INTERFACE)]} {
+      set mode cgi
+    } else {
+      set mode local
+    }
+  }
+  if {$mode=="cgi"} {
+    wappInt-handle-cgi-request
+  } else {
+    wappInt-start-listener $port $mode $fromip
+    if {!$nowait} {
+      vwait ::forever
+    }
+  }
+}
+
+package provide wapp 1.0

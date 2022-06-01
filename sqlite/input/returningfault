@@ -1,0 +1,25 @@
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+source $testdir/malloc_common.tcl
+
+
+do_execsql_test 1.0 {
+  CREATE TABLE t1 (b);
+} {}
+faultsim_save_and_close
+
+do_faultsim_test pagerfault-1 -faults oom-t* -prep {
+  faultsim_restore_and_reopen
+} -body {
+  execsql { 
+    INSERT INTO t1(b) VALUES(65) RETURNING (
+      SELECT * FROM sqlite_temp_schema
+    ) AS aaa;
+  }
+} -test {
+  faultsim_test_result {1 {sub-select returns 5 columns - expected 1}}
+}
+
+
+finish_test

@@ -1,0 +1,312 @@
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set ::testprefix indexedby
+
+do_test indexedby-1.1 {
+  execsql {
+    CREATE TABLE t1(a, b);
+    CREATE INDEX i1 ON t1(a);
+    CREATE INDEX i2 ON t1(b);
+
+    CREATE TABLE t2(c, d);
+    CREATE INDEX i3 ON t2(c);
+    CREATE INDEX i4 ON t2(d);
+
+    CREATE TABLE t3(e PRIMARY KEY, f);
+
+    CREATE VIEW v1 AS SELECT * FROM t1;
+  }
+} {}
+
+proc EQP {sql} {
+  uplevel "execsql {EXPLAIN QUERY PLAN $sql}"
+}
+
+do_eqp_test indexedby-1.2 {
+  select * from t1 WHERE a = 10; 
+} {SEARCH t1 USING INDEX i1 (a=?)}
+do_eqp_test indexedby-1.3 {
+  select * from t1 ; 
+} {SCAN t1}
+do_eqp_test indexedby-1.4 {
+  select * from t1, t2 WHERE c = 10; 
+} {
+  QUERY PLAN
+  |--SEARCH t2 USING INDEX i3 (c=?)
+  `--SCAN t1
+}
+
+do_test indexedby-2.1 {
+  execsql { SELECT * FROM t1 NOT INDEXED WHERE a = 'one' AND b = 'two'}
+} {}
+do_test indexedby-2.1b {
+  execsql { SELECT * FROM main.t1 NOT INDEXED WHERE a = 'one' AND b = 'two'}
+} {}
+do_test indexedby-2.2 {
+  execsql { SELECT * FROM t1 INDEXED BY i1 WHERE a = 'one' AND b = 'two'}
+} {}
+do_test indexedby-2.2b {
+  execsql { SELECT * FROM main.t1 INDEXED BY i1 WHERE a = 'one' AND b = 'two'}
+} {}
+do_test indexedby-2.3 {
+  execsql { SELECT * FROM t1 INDEXED BY i2 WHERE a = 'one' AND b = 'two'}
+} {}
+do_test indexedby-2.4 {
+  catchsql { SELECT * FROM t1 INDEXED BY i3 WHERE a = 'one' AND b = 'two'}
+} {1 {no such index: i3}}
+
+do_test indexedby-2.4.1 {
+  catchsql { SELECT b FROM t1 INDEXED BY i1 WHERE b = 'two' }
+} {0 {}}
+
+do_test indexedby-2.5 {
+  catchsql { SELECT * FROM t1 INDEXED BY i5 WHERE a = 'one' AND b = 'two'}
+} {1 {no such index: i5}}
+do_test indexedby-2.6 {
+  catchsql { SELECT * FROM t1 INDEXED BY WHERE a = 'one' AND b = 'two'}
+} {1 {near "WHERE": syntax error}}
+do_test indexedby-2.7 {
+  catchsql { SELECT * FROM v1 INDEXED BY i1 WHERE a = 'one' }
+} {1 {no such index: i1}}
+
+
+do_eqp_test indexedby-3.1 {
+  SELECT * FROM t1 WHERE a = 'one' AND b = 'two'
+} {/SEARCH t1 USING INDEX/}
+do_eqp_test indexedby-3.1.1 {
+  SELECT * FROM t1 NOT INDEXED WHERE a = 'one' AND b = 'two'
+} {SCAN t1}
+do_eqp_test indexedby-3.1.2 {
+  SELECT * FROM t1 NOT INDEXED WHERE rowid=1
+} {/SEARCH t1 USING INTEGER PRIMARY KEY .rowid=/}
+
+
+do_eqp_test indexedby-3.2 {
+  SELECT * FROM t1 INDEXED BY i1 WHERE a = 'one' AND b = 'two'
+} {SEARCH t1 USING INDEX i1 (a=?)}
+do_eqp_test indexedby-3.3 {
+  SELECT * FROM t1 INDEXED BY i2 WHERE a = 'one' AND b = 'two'
+} {SEARCH t1 USING INDEX i2 (b=?)}
+do_test indexedby-3.4 {
+  catchsql { SELECT * FROM t1 INDEXED BY i2 WHERE a = 'one' }
+} {0 {}}
+do_test indexedby-3.5 {
+  catchsql { SELECT * FROM t1 INDEXED BY i2 ORDER BY a }
+} {0 {}}
+do_test indexedby-3.6 {
+  catchsql { SELECT * FROM t1 INDEXED BY i1 WHERE a = 'one' }
+} {0 {}}
+do_test indexedby-3.7 {
+  catchsql { SELECT * FROM t1 INDEXED BY i1 ORDER BY a }
+} {0 {}}
+
+do_eqp_test indexedby-3.8 {
+  SELECT * FROM t3 INDEXED BY sqlite_autoindex_t3_1 ORDER BY e 
+} {SCAN t3 USING INDEX sqlite_autoindex_t3_1}
+do_eqp_test indexedby-3.9 {
+  SELECT * FROM t3 INDEXED BY sqlite_autoindex_t3_1 WHERE e = 10 
+} {SEARCH t3 USING INDEX sqlite_autoindex_t3_1 (e=?)}
+do_test indexedby-3.10 {
+  catchsql { SELECT * FROM t3 INDEXED BY sqlite_autoindex_t3_1 WHERE f = 10 }
+} {0 {}}
+do_test indexedby-3.11 {
+  catchsql { SELECT * FROM t3 INDEXED BY sqlite_autoindex_t3_2 WHERE f = 10 }
+} {1 {no such index: sqlite_autoindex_t3_2}}
+
+do_eqp_test indexedby-4.1 {
+  SELECT * FROM t1, t2 WHERE a = c 
+} {
+  QUERY PLAN
+  |--SCAN t1
+  `--SEARCH t2 USING INDEX i3 (c=?)
+}
+do_eqp_test indexedby-4.2 {
+  SELECT * FROM t1 INDEXED BY i1, t2 WHERE a = c 
+} {
+  QUERY PLAN
+  |--SCAN t1 USING INDEX i1
+  `--SEARCH t2 USING INDEX i3 (c=?)
+}
+do_test indexedby-4.3 {
+  catchsql {
+    SELECT * FROM t1 INDEXED BY i1, t2 INDEXED BY i3 WHERE a=c
+  }
+} {0 {}}
+do_test indexedby-4.4 {
+  catchsql {
+    SELECT * FROM t2 INDEXED BY i3, t1 INDEXED BY i1 WHERE a=c
+  }
+} {0 {}}
+
+do_execsql_test indexedby-5.1 {
+  CREATE VIEW v2 AS SELECT * FROM t1 INDEXED BY i1 WHERE a > 5;
+  EXPLAIN QUERY PLAN SELECT * FROM v2 
+} {/*SEARCH t1 USING INDEX i1 (a>?)*/}
+do_execsql_test indexedby-5.2 {
+  EXPLAIN QUERY PLAN SELECT * FROM v2 WHERE b = 10 
+} {/*SEARCH t1 USING INDEX i1 (a>?)*/}
+do_test indexedby-5.3 {
+  execsql { DROP INDEX i1 }
+  catchsql { SELECT * FROM v2 }
+} {1 {no such index: i1}}
+do_test indexedby-5.4 {
+  # Recreate index i1 in such a way as it cannot be used by the view query.
+  execsql { CREATE INDEX i1 ON t1(b) }
+  catchsql { SELECT * FROM v2 }
+} {0 {}}
+do_test indexedby-5.5 {
+  # Drop and recreate index i1 again. This time, create it so that it can
+  # be used by the query.
+  execsql { DROP INDEX i1 ; CREATE INDEX i1 ON t1(a) }
+  catchsql { SELECT * FROM v2 }
+} {0 {}}
+
+do_eqp_test indexedby-6.1 {
+  SELECT * FROM t1 WHERE b = 10 ORDER BY rowid 
+} {SEARCH t1 USING INDEX i2 (b=?)}
+do_eqp_test indexedby-6.2 {
+  SELECT * FROM t1 NOT INDEXED WHERE b = 10 ORDER BY rowid 
+} {SCAN t1}
+
+do_eqp_test indexedby-7.1 {
+  DELETE FROM t1 WHERE a = 5 
+} {SEARCH t1 USING INDEX i1 (a=?)}
+do_eqp_test indexedby-7.2 {
+  DELETE FROM t1 NOT INDEXED WHERE a = 5 
+} {SCAN t1}
+do_eqp_test indexedby-7.3 {
+  DELETE FROM t1 INDEXED BY i1 WHERE a = 5 
+} {SEARCH t1 USING INDEX i1 (a=?)}
+do_eqp_test indexedby-7.4 {
+  DELETE FROM t1 INDEXED BY i1 WHERE a = 5 AND b = 10
+} {SEARCH t1 USING INDEX i1 (a=?)}
+do_eqp_test indexedby-7.5 {
+  DELETE FROM t1 INDEXED BY i2 WHERE a = 5 AND b = 10
+} {SEARCH t1 USING INDEX i2 (b=?)}
+do_test indexedby-7.6 {
+  catchsql { DELETE FROM t1 INDEXED BY i2 WHERE a = 5}
+} {0 {}}
+
+do_eqp_test indexedby-8.1 {
+  UPDATE t1 SET rowid=rowid+1 WHERE a = 5 
+} {SEARCH t1 USING COVERING INDEX i1 (a=?)}
+do_eqp_test indexedby-8.2 {
+  UPDATE t1 NOT INDEXED SET rowid=rowid+1 WHERE a = 5 
+} {SCAN t1}
+do_eqp_test indexedby-8.3 {
+  UPDATE t1 INDEXED BY i1 SET rowid=rowid+1 WHERE a = 5 
+} {SEARCH t1 USING COVERING INDEX i1 (a=?)}
+do_eqp_test indexedby-8.4 {
+  UPDATE t1 INDEXED BY i1 SET rowid=rowid+1 WHERE a = 5 AND b = 10
+} {SEARCH t1 USING INDEX i1 (a=?)}
+do_eqp_test indexedby-8.5 {
+  UPDATE t1 INDEXED BY i2 SET rowid=rowid+1 WHERE a = 5 AND b = 10
+} {SEARCH t1 USING INDEX i2 (b=?)}
+do_test indexedby-8.6 {
+  catchsql { UPDATE t1 INDEXED BY i2 SET rowid=rowid+1 WHERE a = 5}
+} {0 {}}
+
+do_test indexedby-9.1 {
+  execsql {
+    CREATE TABLE maintable( id integer);
+    CREATE TABLE joinme(id_int integer, id_text text);
+    CREATE INDEX joinme_id_text_idx on joinme(id_text);
+    CREATE INDEX joinme_id_int_idx on joinme(id_int);
+  }
+} {}
+do_test indexedby-9.2 {
+  catchsql {
+    select * from maintable as m inner join
+    joinme as j indexed by joinme_id_text_idx
+    on ( m.id  = j.id_int)
+  }
+} {0 {}}
+do_test indexedby-9.3 {
+  catchsql { select * from maintable, joinme INDEXED by joinme_id_text_idx }
+} {0 {}}
+
+do_test indexedby-10.1 {
+  execsql {
+    CREATE TABLE indexed(x,y);
+    INSERT INTO indexed VALUES(1,2);
+    SELECT * FROM indexed;
+  }
+} {1 2}
+do_test indexedby-10.2 {
+  execsql {
+    CREATE INDEX i10 ON indexed(x);
+    SELECT * FROM indexed indexed by i10 where x>0;
+  }
+} {1 2}
+do_test indexedby-10.3 {
+  execsql {
+    DROP TABLE indexed;
+    CREATE TABLE t10(indexed INTEGER);
+    INSERT INTO t10 VALUES(1);
+    CREATE INDEX indexed ON t10(indexed);
+    SELECT * FROM t10 indexed by indexed WHERE indexed>0
+  }
+} {1}
+
+do_execsql_test 11.1 {
+  CREATE TABLE x1(a, b TEXT);
+  CREATE INDEX x1i ON x1(a, b);
+  INSERT INTO x1 VALUES(1, 1);
+  INSERT INTO x1 VALUES(1, 1);
+  INSERT INTO x1 VALUES(1, 1);
+  INSERT INTO x1 VALUES(1, 1);
+}
+do_execsql_test 11.2 {
+  SELECT a,b,rowid FROM x1 INDEXED BY x1i WHERE a=1 AND b=1 AND rowid=3;
+} {1 1 3}
+do_execsql_test 11.3 {
+  SELECT a,b,rowid FROM x1 INDEXED BY x1i WHERE a=1 AND b=1 AND rowid='3';
+} {1 1 3}
+do_execsql_test 11.4 {
+  SELECT a,b,rowid FROM x1 INDEXED BY x1i WHERE a=1 AND b=1 AND rowid='3.0';
+} {1 1 3}
+do_eqp_test 11.5 {
+  SELECT a,b,rowid FROM x1 INDEXED BY x1i WHERE a=1 AND b=1 AND rowid='3.0';
+} {SEARCH x1 USING COVERING INDEX x1i (a=? AND b=? AND rowid=?)}
+
+do_execsql_test 11.6 {
+  CREATE TABLE x2(c INTEGER PRIMARY KEY, a, b TEXT);
+  CREATE INDEX x2i ON x2(a, b);
+  INSERT INTO x2 VALUES(1, 1, 1);
+  INSERT INTO x2 VALUES(2, 1, 1);
+  INSERT INTO x2 VALUES(3, 1, 1);
+  INSERT INTO x2 VALUES(4, 1, 1);
+}
+do_execsql_test 11.7 {
+  SELECT a,b,c FROM x2 INDEXED BY x2i WHERE a=1 AND b=1 AND c=3;
+} {1 1 3}
+do_execsql_test 11.8 {
+  SELECT a,b,c FROM x2 INDEXED BY x2i WHERE a=1 AND b=1 AND c='3';
+} {1 1 3}
+do_execsql_test 11.9 {
+  SELECT a,b,c FROM x2 INDEXED BY x2i WHERE a=1 AND b=1 AND c='3.0';
+} {1 1 3}
+do_eqp_test 11.10 {
+  SELECT a,b,c FROM x2 INDEXED BY x2i WHERE a=1 AND b=1 AND c='3.0';
+} {SEARCH x2 USING COVERING INDEX x2i (a=? AND b=? AND rowid=?)}
+
+do_execsql_test 12.1 {
+  CREATE TABLE o1(x INTEGER PRIMARY KEY, y, z);
+  CREATE INDEX p1 ON o1(z);
+  CREATE INDEX p2 ON o1(y) WHERE z=1;
+}
+do_catchsql_test 12.2 {
+  SELECT * FROM o1 INDEXED BY p2 ORDER BY 1;
+} {1 {no query solution}}
+do_execsql_test 12.3 {
+  DROP INDEX p1;
+  DROP INDEX p2;
+  CREATE INDEX p2 ON o1(y) WHERE z=1;
+  CREATE INDEX p1 ON o1(z);
+}
+do_catchsql_test 12.4 {
+  SELECT * FROM o1 INDEXED BY p2 ORDER BY 1;
+} {1 {no query solution}}
+
+finish_test

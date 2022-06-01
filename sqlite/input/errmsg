@@ -1,0 +1,85 @@
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+set testprefix errmsg
+
+
+proc error_messages_worker {prepare sql schema} {
+  set ret [list]
+
+  set stmt [$prepare db $sql -1 dummy]
+  execsql $schema
+  lappend ret [sqlite3_step $stmt]
+  lappend ret [sqlite3_errmsg db]
+  lappend ret [sqlite3_finalize $stmt]
+  lappend ret [sqlite3_errmsg db]
+
+  set ret
+}
+
+proc error_messages_v2 {sql {schema {}}} {
+  error_messages_worker sqlite3_prepare_v2 $sql $schema
+}
+
+proc error_messages {sql {schema {}}} {
+  error_messages_worker sqlite3_prepare $sql $schema
+}
+
+proc sql_error {msg} { error $msg }
+db func sql_error sql_error
+
+do_test 1.1 {
+  error_messages "SELECT sql_error('custom message')"
+} [list {*}{
+    SQLITE_ERROR {SQL logic error} 
+    SQLITE_ERROR {custom message}
+}]
+do_test 1.2 {
+  error_messages_v2 "SELECT sql_error('custom message')"
+} [list {*}{
+    SQLITE_ERROR {custom message}
+    SQLITE_ERROR {custom message}
+}]
+
+do_execsql_test 2.1 {
+  CREATE TABLE t1(a PRIMARY KEY, b UNIQUE);
+  INSERT INTO t1 VALUES('abc', 'def');
+}
+do_test 2.2 {
+  error_messages "INSERT INTO t1 VALUES('ghi', 'def')"
+} [list {*}{
+    SQLITE_ERROR      {SQL logic error} 
+    SQLITE_CONSTRAINT {UNIQUE constraint failed: t1.b}
+}]
+verify_ex_errcode 2.2b SQLITE_CONSTRAINT_UNIQUE
+do_test 2.3 {
+  error_messages_v2 "INSERT INTO t1 VALUES('ghi', 'def')"
+} [list {*}{
+    SQLITE_CONSTRAINT {UNIQUE constraint failed: t1.b}
+    SQLITE_CONSTRAINT {UNIQUE constraint failed: t1.b}
+}]
+verify_ex_errcode 2.3b SQLITE_CONSTRAINT_UNIQUE
+
+do_execsql_test 3.1.1 {
+  CREATE TABLE t2(a PRIMARY KEY, b UNIQUE);
+  INSERT INTO t2 VALUES('abc', 'def');
+}
+do_test 3.1.2 {
+  error_messages "SELECT a FROM t2" "DROP TABLE t2"
+} [list {*}{
+    SQLITE_ERROR {SQL logic error} 
+    SQLITE_SCHEMA {database schema has changed}
+}]
+do_execsql_test 3.2.1 {
+  CREATE TABLE t2(a PRIMARY KEY, b UNIQUE);
+  INSERT INTO t2 VALUES('abc', 'def');
+}
+do_test 3.2.2 {
+  error_messages_v2 "SELECT a FROM t2" "DROP TABLE t2"
+} [list {*}{
+    SQLITE_ERROR {no such table: t2} 
+    SQLITE_ERROR {no such table: t2}
+}]
+
+finish_test

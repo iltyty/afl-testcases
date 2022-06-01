@@ -1,0 +1,18 @@
+
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+set cnt 0
+foreach start {0 100 10000 1000000 0x10000000} {
+  foreach mult {1 0x10 0x100 0x1000 0x10000 0x100000 0x1000000 0x10000000} {
+    foreach incr {1 500 10000 50000000} {
+      incr cnt
+      do_test varint-1.$cnt {
+        btree_varint_test $start $mult 5000 $incr
+      } {}
+    }
+  }
+}
+
+finish_test

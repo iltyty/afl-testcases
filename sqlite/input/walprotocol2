@@ -1,0 +1,63 @@
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+source $testdir/lock_common.tcl
+source $testdir/wal_common.tcl
+ifcapable !wal {finish_test ; return }
+
+set testprefix walprotocol2
+
+do_execsql_test 1.0 {
+  PRAGMA journal_mode = wal;
+  CREATE TABLE x(y);
+  INSERT INTO x VALUES('z');
+} {wal}
+
+db close
+
+proc lock_callback {method filename handle lock} {
+  # puts "$method $filename $handle $lock"
+}
+testvfs T
+T filter xShmLock 
+T script lock_callback
+
+sqlite3 db  test.db -vfs T
+sqlite3 db2 test.db -vfs T
+
+do_execsql_test 2.0 {
+  SELECT * FROM x;
+} {z}
+do_execsql_test -db db2 2.1 {
+  SELECT * FROM x;
+} {z}
+
+proc lock_callback {method filename handle lock} {
+  if {$lock=="0 1 lock exclusive"} {
+    proc lock_callback {method filename handle lock} {}
+    db2 eval { INSERT INTO x VALUES('y') }
+  }
+}
+do_catchsql_test 2.2 {
+  BEGIN EXCLUSIVE;
+} {1 {database is locked}}
+do_test 2.3 {
+  sqlite3_extended_errcode db
+} {SQLITE_BUSY}
+
+proc lock_callback {method filename handle lock} {
+  if {$lock=="0 1 lock exclusive"} {
+    proc lock_callback {method filename handle lock} {}
+    db2 eval { INSERT INTO x VALUES('x') }
+  }
+}
+db timeout 10
+do_catchsql_test 2.4 {
+  BEGIN EXCLUSIVE;
+} {0 {}}
+do_execsql_test 2.5 {
+  SELECT * FROM x;
+  COMMIT;
+} {z y x}
+
+finish_test

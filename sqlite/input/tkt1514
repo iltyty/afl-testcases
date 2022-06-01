@@ -1,0 +1,12 @@
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+do_test tkt1514-1.1 {
+  catchsql {
+    CREATE TABLE t1(a,b);
+    SELECT a FROM t1 WHERE max(b)<10 GROUP BY a;
+  }
+} {1 {misuse of aggregate: max()}}
+
+finish_test

@@ -1,0 +1,146 @@
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix walnoshm
+ifcapable !wal {finish_test ; return }
+
+db close
+testvfs tvfsshm
+testvfs tvfs -default 1 -iversion 1 
+sqlite3 db test.db
+
+do_execsql_test 1.1 {
+  CREATE TABLE t1(x, y);
+  INSERT INTO t1 VALUES(1, 2);
+}
+
+do_execsql_test 1.2 { 
+  PRAGMA journal_mode = WAL;
+  SELECT * FROM t1;
+} {delete 1 2}
+do_test 1.3 { file exists test.db-wal } {0}
+
+do_execsql_test 1.4 { 
+  PRAGMA locking_mode = exclusive;
+  PRAGMA journal_mode = WAL;
+  SELECT * FROM t1;
+} {exclusive wal 1 2}
+do_test 1.5 { file exists test.db-wal } {1}
+
+do_execsql_test 1.6 { INSERT INTO t1 VALUES(3, 4) }
+
+do_execsql_test 1.7 {
+  PRAGMA locking_mode = normal;
+} {exclusive}
+do_execsql_test 1.8 {
+  PRAGMA journal_mode = delete;
+  PRAGMA main.locking_mode;
+} {delete exclusive}
+do_execsql_test 1.9 {
+  PRAGMA locking_mode = normal;
+} {normal}
+do_execsql_test 1.10 {
+  SELECT * FROM t1;
+} {1 2 3 4}
+do_test 1.11 { file exists test.db-wal } {0}
+
+do_execsql_test 2.1.1 {
+  CREATE TABLE t2(x, y);
+  INSERT INTO t2 VALUES('a', 'b');
+  INSERT INTO t2 VALUES('c', 'd');
+}
+do_execsql_test 2.1.2 {
+  PRAGMA locking_mode = exclusive;
+  PRAGMA journal_mode = WAL;
+  INSERT INTO t2 VALUES('e', 'f');
+  INSERT INTO t2 VALUES('g', 'h');
+} {exclusive wal}
+
+do_test 2.1.3 {
+  forcecopy test.db     test2.db
+  forcecopy test.db-wal test2.db-wal
+  sqlite3 db2 test2.db
+  catchsql { SELECT * FROM t2 } db2
+} {1 {unable to open database file}}
+do_test 2.1.4 {
+  catchsql { PRAGMA journal_mode = delete } db2
+} {1 {unable to open database file}}
+do_test 2.1.5 {
+  execsql { 
+    PRAGMA locking_mode = exclusive; 
+    PRAGMA journal_mode = delete;
+    SELECT * FROM t2;
+  } db2
+} {exclusive delete a b c d e f g h}
+
+do_test 2.2.1 {
+  forcecopy test.db     test2.db
+  forcecopy test.db-wal test2.db-wal
+  sqlite3 db3 test2.db -vfs tvfsshm
+  sqlite3 db2 test2.db
+  execsql { SELECT * FROM t2 } db3
+} {a b c d e f g h}
+
+do_test 2.2.2 {
+  execsql  { PRAGMA locking_mode = exclusive }  db2
+  catchsql { PRAGMA journal_mode = delete } db2
+} {1 {database is locked}}
+
+do_test 2.2.3 {
+  # This is to test that [db2] is not holding a PENDING lock (which can 
+  # happen when an attempt to obtain an EXCLUSIVE lock fails).
+  sqlite3 db4 test2.db -vfs tvfsshm
+  execsql { SELECT * FROM t2 } db4
+} {a b c d e f g h}
+
+do_test 2.2.4 {
+  catchsql { SELECT * FROM t2 } db2
+} {1 {database is locked}}
+
+do_test 2.2.5 {
+  db4 close
+  sqlite3 db4 test2.db -vfs tvfsshm
+  execsql { SELECT * FROM t2 } db4
+} {a b c d e f g h}
+
+do_test 2.2.6 {
+  db3 close
+  db4 close
+  execsql { SELECT * FROM t2 } db2
+} {a b c d e f g h}
+
+db2 close
+db close
+
+do_test 3.1 {
+  sqlite3 db test.db -vfs tvfsshm
+  execsql { 
+    SELECT * FROM t1;
+    PRAGMA locking_mode = EXCLUSIVE;
+    INSERT INTO t1 VALUES(5, 6);
+    PRAGMA locking_mode = NORMAL;
+    INSERT INTO t1 VALUES(7, 8);
+  }
+  sqlite3 db2 test.db -vfs tvfsshm
+  execsql { SELECT * FROM t1 } db2
+} {1 2 3 4 5 6 7 8}
+db close
+db2 close
+do_test 3.2 {
+  sqlite3 db  test.db -vfs tvfsshm
+  execsql { 
+    PRAGMA locking_mode = EXCLUSIVE;
+    INSERT INTO t1 VALUES(9, 10);
+    PRAGMA locking_mode = NORMAL;
+    INSERT INTO t1 VALUES(11, 12);
+  }
+  sqlite3 db2 test.db -vfs tvfsshm
+  catchsql { SELECT * FROM t1 } db2
+} {1 {database is locked}}
+db close
+db2 close
+
+tvfs delete
+tvfsshm delete
+
+finish_test

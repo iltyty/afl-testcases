@@ -1,0 +1,27 @@
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+do_ioerr_test ioerr3-1 -sqlprep {
+  CREATE TABLE t1(id INTEGER, name TEXT);
+} -tclbody {
+  sqlite3_soft_heap_limit 8192
+  db cache size 0
+  execsql BEGIN
+  for {set ii 0} {$ii < 100} {incr ii} {
+    execsql {
+      INSERT INTO t1(id, name) VALUES (1,
+'A1234567890B1234567890C1234567890D1234567890E1234567890F1234567890G1234567890H1234567890I1234567890J1234567890K1234567890L1234567890M1234567890N1234567890O1234567890P1234567890Q1234567890R1234567890'
+      );
+    }
+  }
+  execsql COMMIT
+}
+
+do_ioerr_test ioerr3-2 -sqlbody {
+  CREATE TEMP TABLE t1(x,y);
+}
+
+sqlite3_soft_heap_limit 0
+
+finish_test

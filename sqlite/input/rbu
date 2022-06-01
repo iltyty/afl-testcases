@@ -1,0 +1,8 @@
+
+set testdir [file dirname $argv0]
+source $testdir/permutations.test
+
+ifcapable !rbu { finish_test ; return }
+
+run_test_suite rbu
+finish_test

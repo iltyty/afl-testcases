@@ -1,0 +1,109 @@
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix corrupt4
+
+if {[nonzero_reserved_bytes]} {finish_test; return;}
+
+database_may_be_corrupt
+
+ifcapable !pager_pragmas {
+  finish_test
+  return
+}
+
+do_test corrupt4-1.1 {
+  set bigstring [string repeat 0123456789 200]
+  execsql {
+    PRAGMA auto_vacuum=OFF;
+    PRAGMA page_size=1024;
+    CREATE TABLE t1(x);
+    INSERT INTO t1 VALUES($bigstring);
+    CREATE TABLE t2(y);
+    INSERT INTO t2 VALUES(1);
+    DROP TABLE t1;
+  }
+  file size test.db
+} [expr {1024*4}]
+
+do_test corrupt4-1.2 {
+  execsql {PRAGMA freelist_count}
+} {2}
+
+set trunkpgno [hexio_get_int [hexio_read test.db 32 4]]
+set baseaddr [expr {($trunkpgno-1)*1024}]
+
+do_test corrupt4-1.3 {
+  hexio_get_int [hexio_read test.db [expr {$::baseaddr+4}] 4]
+} {1}
+
+do_test corrupt4-1.4 {
+  hexio_write test.db [expr {$::baseaddr+4}] [hexio_render_int32 -100000000]
+  db close
+  sqlite3 db test.db
+  catchsql {
+    DROP TABLE t2
+  }
+} {1 {database disk image is malformed}}
+
+
+reset_db
+do_execsql_test 2.0 {
+  PRAGMA page_size = 512;
+  CREATE TABLE t1(a, b, c);
+}
+
+set nView 1000
+do_test 2.1 {
+  execsql BEGIN
+  for {set ii 0} {$ii<$nView} {incr ii} {
+    execsql " CREATE VIEW v$ii AS SELECT a, b, c FROM t1 "
+  }
+  execsql COMMIT
+} {}
+db close
+
+proc get2byte {fd offset} {
+  seek $fd $offset
+  set bin [read $fd 2]
+  binary scan $bin S val
+  set val
+}
+proc get4byte {fd offset} {
+  seek $fd $offset
+  set bin [read $fd 4]
+  binary scan $bin I val
+  set val
+}
+proc put4byte {fd offset val} {
+  seek $fd $offset
+  set bin [binary format I $val]
+  puts -nonewline $fd $bin
+}
+
+set fd [open test.db r+]
+fconfigure $fd -encoding binary -translation binary
+set nChild [get2byte $fd 103]
+set offChild [get2byte $fd [expr 100+12+($nChild-2)*2]]
+set pgnoChild [get4byte $fd $offChild]
+put4byte $fd $offChild 1
+close $fd
+
+if {![info exists ::G(perm:presql)]} {
+  sqlite3 db test.db
+
+  do_catchsql_test 2.2 {
+    PRAGMA writable_schema = 1;
+    SELECT * FROM sqlite_schema;
+  } {1 {database disk image is malformed}}
+
+  do_test 2.3 {
+    list [catch {
+      for {set ii $nView} {$ii<$nView*2} {incr ii} {
+        execsql "INSERT INTO sqlite_master VALUES(1, 2, 3, 4, 5)"
+      }
+    } msg] $msg
+  } {1 {database disk image is malformed}}
+}
+
+finish_test

@@ -1,0 +1,157 @@
+
+set testdir [file dirname $argv0]
+
+source $testdir/tester.tcl
+if {[run_thread_tests]==0} { finish_test ; return }
+ifcapable !shared_cache {
+  finish_test
+  return
+}
+
+db close
+
+set ::enable_shared_cache [sqlite3_enable_shared_cache]
+sqlite3_enable_shared_cache 1
+
+proc runsql {zSql {db {}}} {
+  set rc SQLITE_OK
+  while {$rc=="SQLITE_OK" && $zSql ne ""} {
+    set STMT [sqlite3_prepare_v2 $db $zSql -1 zSql]
+    while {[set rc [sqlite3_step $STMT]] eq "SQLITE_ROW"} { }
+    set rc [sqlite3_finalize $STMT]
+  }
+  return $rc
+}
+do_test thread005-1.1 {
+  sqlite3 db test.db
+  db eval { CREATE TABLE t1(a, b) }
+  db close
+} {}
+for {set ii 2} {$ii < 500} {incr ii} {
+  unset -nocomplain finished
+  thread_spawn finished(0) {sqlite3_open test.db}
+  thread_spawn finished(1) {sqlite3_open test.db}
+  if {![info exists finished(0)]} { vwait finished(0) }
+  if {![info exists finished(1)]} { vwait finished(1) }
+
+  do_test thread005-1.$ii {
+    runsql { BEGIN }                       $finished(0)
+    runsql { INSERT INTO t1 VALUES(1, 2) } $finished(0)
+
+    # If the race-condition was hit, then $finished(0 and $finished(1)
+    # will not use the same pager cache. In this case the next statement
+    # can be executed succesfully. However, if the race-condition is not
+    # hit, then $finished(1) will be blocked by the write-lock held by 
+    # $finished(0) on the shared-cache table t1 and the statement will
+    # return SQLITE_LOCKED.
+    #
+    runsql { SELECT * FROM t1 }            $finished(1)
+  } {SQLITE_LOCKED}
+
+  sqlite3_close $finished(0)
+  sqlite3_close $finished(1)
+}
+
+
+
+forcedelete test.db test2.db
+unset -nocomplain finished
+
+do_test thread005-2.1 {
+  sqlite3 db test.db
+  execsql { ATTACH 'test2.db' AS aux }
+  execsql {
+    CREATE TABLE aux.t1(a INTEGER PRIMARY KEY, b UNIQUE);
+    INSERT INTO t1 VALUES(1, 1);
+    INSERT INTO t1 VALUES(2, 2);
+  }
+  db close
+} {}
+
+
+set ThreadProgram {
+  proc execsql {zSql {db {}}} {
+    if {$db eq ""} {set db $::DB}
+
+    set lRes [list]
+    set rc SQLITE_OK
+
+    while {$rc=="SQLITE_OK" && $zSql ne ""} {
+      set STMT [sqlite3_prepare_v2 $db $zSql -1 zSql]
+      while {[set rc [sqlite3_step $STMT]] eq "SQLITE_ROW"} {
+        for {set i 0} {$i < [sqlite3_column_count $STMT]} {incr i} {
+          lappend lRes [sqlite3_column_text $STMT 0]
+        }
+      }
+      set rc [sqlite3_finalize $STMT]
+    }
+
+    if {$rc != "SQLITE_OK"} { error "$rc [sqlite3_errmsg $db]" }
+    return $lRes
+  }
+
+  if {$isWriter} {
+    set Sql {
+      BEGIN;
+        DELETE FROM t1 WHERE a = (SELECT max(a) FROM t1);
+        INSERT INTO t1 VALUES(NULL, NULL);
+        UPDATE t1 SET b = a WHERE a = (SELECT max(a) FROM t1);
+        SELECT count(*) FROM t1 WHERE b IS NULL;
+      COMMIT;
+    }
+  } else {
+    set Sql {
+      BEGIN;
+      SELECT count(*) FROM t1 WHERE b IS NULL;
+      COMMIT;
+    }
+  }
+
+  set ::DB [sqlite3_open test.db]
+
+  execsql { ATTACH 'test2.db' AS aux }
+
+  set result "ok"
+  set finish [expr [clock_seconds]+5]
+  while {$result eq "ok" && [clock_seconds] < $finish} {
+    set rc [catch {execsql $Sql} msg]
+    if {$rc} {
+      if {[string match "SQLITE_LOCKED*" $msg]} {
+        catch { execsql ROLLBACK }
+      } else {
+        sqlite3_close $::DB
+        error $msg
+      }
+    } elseif {$msg ne "0"} {
+      set result "failed"
+    }
+  }
+
+  sqlite3_close $::DB
+  set result
+}
+
+sqlite3 db test.db
+sqlite3 db test2.db
+
+puts "Running thread-tests for ~20 seconds"
+thread_spawn finished(0) {set isWriter 0} $ThreadProgram
+thread_spawn finished(1) {set isWriter 1} $ThreadProgram
+if {![info exists finished(0)]} { vwait finished(0) }
+if {![info exists finished(1)]} { vwait finished(1) }
+
+catch { db close }
+catch { db2 close }
+
+do_test thread005-2.2 {
+  list $finished(0) $finished(1)
+} {ok ok}
+
+do_test thread005-2.3 {
+  sqlite3 db test.db
+  execsql { ATTACH 'test2.db' AS aux }
+  execsql { SELECT count(*) FROM t1 WHERE b IS NULL }
+} {0}
+
+sqlite3_enable_shared_cache $::enable_shared_cache
+finish_test

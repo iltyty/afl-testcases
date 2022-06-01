@@ -1,0 +1,55 @@
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+if {[info commands sqlite3async_initialize] eq ""} {
+  # The async logic is not built into this system
+  finish_test
+  return
+}
+
+do_test tkt-94c94-1.1 {
+  execsql { CREATE TABLE t1(a, b) }
+} {}
+
+db close
+if {[catch {fake_big_file 4096 [get_pwd]/test.db} msg]} {
+  puts "**** Unable to create a file larger than 4096 MB. *****"
+  finish_test
+  return
+}
+
+sqlite3async_initialize "" 1
+sqlite3 db test.db
+sqlite3 db2 test.db
+
+do_test tkt-94c94-2.1 {
+  execsql { CREATE TABLE t2(x, y) } db
+} {}
+do_test tkt-94c94-2.2 {
+  execsql { INSERT INTO t2 VALUES(1, 2) } db2
+} {}
+do_test tkt-94c94-2.3 {
+  execsql { SELECT * FROM t2 } db
+} {1 2}
+do_test tkt-94c94-2.4 {
+  sqlite3async_control halt idle
+  sqlite3async_start
+  sqlite3async_wait
+} {}
+do_test tkt-94c94-2.5 {
+  execsql { SELECT * FROM t2 } db
+} {1 2}
+do_test tkt-94c94-2.6 {
+  sqlite3async_start
+  sqlite3async_wait
+} {}
+
+db close
+db2 close
+sqlite3async_start
+sqlite3async_wait
+sqlite3async_control halt never
+sqlite3async_shutdown
+
+finish_test

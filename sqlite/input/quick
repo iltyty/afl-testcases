@@ -1,0 +1,7 @@
+
+set testdir [file dirname $argv0]
+source $testdir/permutations.test
+
+run_test_suite quick
+
+finish_test

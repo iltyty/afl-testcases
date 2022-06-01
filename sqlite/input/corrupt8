@@ -1,0 +1,79 @@
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+do_not_use_codec
+
+database_may_be_corrupt
+
+ifcapable !pager_pragmas||!autovacuum {
+  finish_test
+  return
+}
+
+do_test corrupt8-1.1 {
+  execsql {
+    PRAGMA auto_vacuum=1;
+    PRAGMA page_size=1024;
+    CREATE TABLE t1(x);
+    INSERT INTO t1(x) VALUES(1);
+    INSERT INTO t1(x) VALUES(2);
+    INSERT INTO t1(x) SELECT x+2 FROM t1;
+    INSERT INTO t1(x) SELECT x+4 FROM t1;
+    INSERT INTO t1(x) SELECT x+8 FROM t1;
+    INSERT INTO t1(x) SELECT x+16 FROM t1;
+    INSERT INTO t1(x) SELECT x+32 FROM t1;
+    INSERT INTO t1(x) SELECT x+64 FROM t1;
+    INSERT INTO t1(x) SELECT x+128 FROM t1;
+    INSERT INTO t1(x) SELECT x+256 FROM t1;
+    CREATE TABLE t2(a,b);
+    INSERT INTO t2 SELECT x, x*x FROM t1;
+  }
+  expr {[file size test.db]>1024*12}
+} {1}
+integrity_check corrupt8-1.2
+
+for {set i 1024} {$i<2048} {incr i 5} {
+  set oldval [hexio_read test.db $i 1]
+  if {$oldval==0} break
+  hexio_write test.db $i 00
+  do_test corrupt8-2.$i.0 {
+    db close
+    sqlite3 db test.db
+    set x [db eval {PRAGMA integrity_check}]
+    expr {$x!="ok"}
+  } {1}
+  for {set k 1} {$k<=5} {incr k} {
+    if {$k==$oldval} continue
+    hexio_write test.db $i 0$k
+    do_test corrupt8-2.$i.$k {
+      db close
+      sqlite3 db test.db
+      set x [db eval {PRAGMA integrity_check}]
+      expr {$x!="ok"}
+    } {1}
+  }
+  hexio_write test.db $i 06
+  do_test corrupt8-2.$i.6 {
+    db close
+    sqlite3 db test.db
+    set x [db eval {PRAGMA integrity_check}]
+    expr {$x!="ok"}
+  } {1}
+  hexio_write test.db $i $oldval
+  if {$oldval>2} {
+    set i2 [expr {$i+1+$i%4}]
+    set oldval [hexio_read test.db $i2 1]
+    hexio_write test.db $i2 [format %02x [expr {($oldval+1)&0xff}]]
+    do_test corrupt8-2.$i.7 {
+      db close
+      sqlite3 db test.db
+      set x [db eval {PRAGMA integrity_check}]
+      expr {$x!="ok"}
+    } {1}
+    hexio_write test.db $i2 $oldval
+  }
+}
+
+
+finish_test

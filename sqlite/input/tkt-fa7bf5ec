@@ -1,0 +1,17 @@
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+do_test tkt-fa7bf5ec-1 {
+  execsql {
+    CREATE TABLE t1(x);
+    INSERT INTO t1 VALUES ('a');
+    INSERT INTO t1 VALUES ('A');
+    INSERT INTO t1 VALUES ('A');
+    SELECT count(CASE WHEN x='a' THEN 1 END),
+           count(CASE WHEN x='A' THEN 1 END)
+      FROM t1;
+  }
+} {1 2}
+
+finish_test

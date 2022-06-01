@@ -1,0 +1,52 @@
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+rename finish_test really_finish_test
+proc finish_test {} {}
+
+set TIMEOUT 3600
+
+if {[llength $argv]>0} {
+  foreach {name value} $argv {
+    switch -- $name {
+      -timeout {
+        set TIMEOUT $value
+      }
+      default {
+         puts stderr "Unknown option: $name"
+         exit
+      }
+    }
+  }
+}
+set argv [list]
+
+
+set SOAKTESTS {
+  fuzz.test
+  fuzz_malloc.test
+  trans.test
+  corruptC.test
+}
+
+set G(isquick) 1
+
+set soak_starttime  [clock_seconds]
+set soak_finishtime [expr {$soak_starttime + $TIMEOUT}]
+
+for {set iRun 0} {[clock_seconds] < $soak_finishtime} {incr iRun} {
+
+  set iIdx [expr {$iRun % [llength $SOAKTESTS]}]
+  source [file join $testdir [lindex $SOAKTESTS $iIdx]]
+  catch {db close}
+
+  if {$sqlite_open_file_count>0} {
+    puts "$tail did not close all files: $sqlite_open_file_count"
+    fail_test $tail
+    set sqlite_open_file_count 0
+  }
+
+  if {[set_test_counter errors]>0} break
+}
+
+really_finish_test

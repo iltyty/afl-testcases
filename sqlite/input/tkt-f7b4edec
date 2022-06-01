@@ -1,0 +1,43 @@
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+db close
+set ::enable_shared_cache [sqlite3_enable_shared_cache 1]
+sqlite3 db1 test.db
+sqlite3 db2 test.db
+unset -nocomplain HOOKS
+set HOOKS {}
+proc update_hook {args} { lappend ::HOOKS $args }
+db1 update_hook update_hook
+db2 update_hook update_hook
+
+do_test tkt-f7b4edec-1 {
+  execsql { CREATE TABLE t1(x, y); } db1
+  execsql { INSERT INTO t1 VALUES(1, 2) } db1
+  set ::HOOKS
+} {{INSERT main t1 1}}
+
+set HOOKS {}
+do_test tkt-f7b4edec-2 {
+  execsql {
+    BEGIN;
+      DROP TABLE t1;
+      CREATE TABLE t1(x, y);
+    ROLLBACK;
+  } db2
+  set ::HOOKS
+} {}
+
+set HOOKS {}
+do_test tkt-f7b4edec-3 {
+  execsql { INSERT INTO t1 VALUES(1, 2) } db1
+  set ::HOOKS
+} {{INSERT main t1 2}}
+
+db1 close
+db2 close
+sqlite3_enable_shared_cache $::enable_shared_cache
+
+
+finish_test

@@ -1,0 +1,24 @@
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix ovfl
+
+do_test 1.1 {
+  set c2 [string repeat abcdefghij 200]
+  execsql {
+    PRAGMA cache_size = 10;
+    CREATE TABLE t1(c1 TEXT, c2 TEXT);
+    BEGIN;
+  }
+  for {set i 1} {$i <= 2000} {incr i} {
+    set c1 [string repeat . $i]
+    execsql { INSERT INTO t1 VALUES($c1, $c2) }
+  }
+  execsql COMMIT
+} {}
+
+do_execsql_test 1.2 {
+  SELECT sum(length(c2)) FROM t1;
+} [expr 2000 * 2000]
+
+finish_test

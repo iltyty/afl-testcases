@@ -1,0 +1,103 @@
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+do_not_use_codec
+
+database_may_be_corrupt
+
+ifcapable !pager_pragmas {
+  finish_test
+  return
+}
+
+proc freelist_trunk_offset {filename} {
+  if {[hexio_read $filename 36 4]==0} {return 0}
+  set pgno [hexio_get_int [hexio_read $filename 32 4]]
+  return [expr {($pgno-1)*[hexio_get_int [hexio_read $filename 16 2]]}]
+}
+
+proc corrupt_freelist {filename N} {
+  set offset [freelist_trunk_offset $filename]
+  if {$offset==0} {error "Freelist is empty"}
+  set cnt [hexio_get_int [hexio_read $filename [expr {$offset+4}] 4]]
+  set pgno [hexio_read $filename [expr {$offset+8}] 4]
+  for {set i 12} {$N>0 && $i<8+4*$cnt} {incr i 4; incr N -1} {
+    hexio_write $filename [expr {$offset+$i}] $pgno
+  }
+}
+
+do_test corrupt9-1.1 {
+  execsql {
+    PRAGMA auto_vacuum=NONE;
+    PRAGMA page_size=1024;
+    CREATE TABLE t1(x);
+    INSERT INTO t1(x) VALUES(1);
+    INSERT INTO t1(x) VALUES(2);
+    INSERT INTO t1(x) SELECT x+2 FROM t1;
+    INSERT INTO t1(x) SELECT x+4 FROM t1;
+    INSERT INTO t1(x) SELECT x+8 FROM t1;
+    INSERT INTO t1(x) SELECT x+16 FROM t1;
+    INSERT INTO t1(x) SELECT x+32 FROM t1;
+    INSERT INTO t1(x) SELECT x+64 FROM t1;
+    INSERT INTO t1(x) SELECT x+128 FROM t1;
+    INSERT INTO t1(x) SELECT x+256 FROM t1;
+    CREATE TABLE t2(a,b);
+    INSERT INTO t2 SELECT x, x*x FROM t1;
+    CREATE INDEX i1 ON t1(x);
+    CREATE INDEX i2 ON t2(b,a);
+    DROP INDEX i2;
+  }
+  expr {[file size test.db]>1024*24}
+} {1}
+integrity_check corrupt9-1.2
+
+db close
+forcecopy test.db test.db-template
+
+corrupt_freelist test.db 1
+sqlite3 db test.db
+do_test corrupt9-2.1 {
+  set x [db eval {PRAGMA integrity_check}]
+  expr {$x!="ok"}
+} {1}
+do_test corrupt9-2.2 {
+  catchsql {
+    CREATE INDEX i2 ON t2(b,a);
+    REINDEX;
+  }
+} {1 {database disk image is malformed}}
+
+
+db close
+forcecopy test.db-template test.db
+corrupt_freelist test.db 2
+sqlite3 db test.db
+do_test corrupt9-3.1 {
+  set x [db eval {PRAGMA integrity_check}]
+  expr {$x!="ok"}
+} {1}
+do_test corrupt9-3.2 {
+  catchsql {
+    CREATE INDEX i2 ON t2(b,a);
+    REINDEX;
+  }
+} {1 {database disk image is malformed}}
+
+db close
+forcecopy test.db-template test.db
+corrupt_freelist test.db 3
+sqlite3 db test.db
+do_test corrupt9-4.1 {
+  set x [db eval {PRAGMA integrity_check}]
+  expr {$x!="ok"}
+} {1}
+do_test corrupt9-4.2 {
+  catchsql {
+    CREATE INDEX i2 ON t2(b,a);
+    REINDEX;
+  }
+} {1 {database disk image is malformed}}
+ 
+
+finish_test

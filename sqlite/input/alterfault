@@ -1,0 +1,28 @@
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix alterfault
+
+ifcapable !altertable {
+  finish_test
+  return
+}
+
+do_execsql_test 1.0 {
+  CREATE TABLE t1(a);                 
+}
+faultsim_save_and_close
+
+do_faultsim_test 1.1 -faults oom* -prep {
+  faultsim_restore_and_reopen
+} -body {
+  execsql {
+    ALTER TABLE t1 ADD COLUMN b CHECK (a!=1)
+  }
+} -test {
+  faultsim_test_result {0 {}}
+}
+
+
+
+finish_test

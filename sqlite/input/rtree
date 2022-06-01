@@ -1,0 +1,9 @@
+
+set testdir [file dirname $argv0]
+source $testdir/permutations.test
+
+ifcapable rtree {
+  run_test_suite rtree
+}
+
+finish_test

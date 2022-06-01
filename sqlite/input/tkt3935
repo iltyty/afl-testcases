@@ -1,0 +1,42 @@
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+do_test tkt3935.1 {
+  execsql {
+    CREATE TABLE t1(a, b);
+    CREATE TABLE t2(c, d);
+  }
+} {}
+
+do_test tkt3935.2 {
+  execsql { SELECT j1.b FROM ( SELECT * FROM t1 INNER JOIN t2 ON a=c ) AS j1 }
+} {}
+do_test tkt3935.3 {
+  execsql { SELECT j1.b FROM (t1 INNER JOIN t2 ON a=c) AS j1 }
+} {}
+
+
+do_test tkt3935.4 {
+  catchsql { SELECT a FROM (t1) AS t ON b USING(a) }
+} {1 {near "USING": syntax error}}
+do_test tkt3935.5 {
+  catchsql { SELECT a FROM (t1) AS t ON b }
+} {1 {a JOIN clause is required before ON}}
+do_test tkt3935.6 {
+  catchsql { SELECT a FROM (SELECT * FROM t1) AS t ON b USING(a) }
+} {1 {near "USING": syntax error}}
+do_test tkt3935.7 {
+  catchsql { SELECT a FROM (SELECT * FROM t1) AS t ON b }
+} {1 {a JOIN clause is required before ON}}
+do_test tkt3935.8 {
+  catchsql { SELECT a FROM t1 AS t ON b }
+} {1 {a JOIN clause is required before ON}}
+do_test tkt3935.9 {
+  catchsql { SELECT a FROM t1 AS t ON b USING(a) }
+} {1 {near "USING": syntax error}}
+do_test tkt3935.10 {
+  catchsql { SELECT a FROM t1 AS t USING(a) }
+} {1 {a JOIN clause is required before USING}}
+
+finish_test

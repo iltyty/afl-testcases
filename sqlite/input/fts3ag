@@ -1,0 +1,67 @@
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+ifcapable !fts3 {
+  finish_test
+  return
+}
+
+db eval {
+  CREATE VIRTUAL TABLE t1 USING fts3(content);
+  INSERT INTO t1 (rowid, content) VALUES(1, 'this is a test');
+  INSERT INTO t1 (rowid, content) VALUES(2, 'also a test');
+}
+
+do_test fts3ag-1.1 {
+  execsql {SELECT rowid FROM t1 WHERE t1 MATCH 'something'}
+} {}
+
+do_test fts3ag-1.2 {
+  execsql {SELECT rowid FROM t1 WHERE t1 MATCH '-this something'}
+} {}
+
+do_test fts3ag-1.3 {
+  execsql {SELECT rowid FROM t1 WHERE t1 MATCH 'this -something'}
+} {1}
+
+do_test fts3ag-1.4 {
+  execsql {SELECT rowid FROM t1 WHERE t1 MATCH '"this something"'}
+} {}
+
+do_test fts3ag-1.5 {
+  execsql {SELECT rowid FROM t1 WHERE t1 MATCH '"something is"'}
+} {}
+
+do_test fts3ag-1.6 {
+  execsql {SELECT rowid FROM t1 WHERE t1 MATCH 'something OR this'}
+} {1}
+
+do_test fts3ag-1.7 {
+  execsql {SELECT rowid FROM t1 WHERE t1 MATCH 'this OR something'}
+} {1}
+
+do_test fts3ag-1.8 {
+  execsql {SELECT rowid FROM t1 WHERE t1 MATCH 'something this'}
+} {}
+
+do_test fts3ag-1.9 {
+  execsql {SELECT rowid FROM t1 WHERE t1 MATCH 'this something'}
+} {}
+
+do_test fts3ag-1.10 {
+  catchsql {SELECT rowid FROM t1 WHERE t1 MATCH '-this -something'}
+} {1 {malformed MATCH expression: [-this -something]}}
+
+do_test fts3ag-1.11 {
+  execsql {SELECT rowid FROM t1 WHERE t1 MATCH 'this OR also'}
+} {1 2}
+do_test fts3ag-1.12 {
+  execsql {SELECT rowid FROM t1 WHERE t1 MATCH 'also OR this'}
+} {1 2}
+
+do_test fts3ag-1.13 {
+  execsql {SELECT rowid FROM t1 WHERE t1 MATCH 'something OR nothing'}
+} {}
+
+finish_test

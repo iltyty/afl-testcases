@@ -1,0 +1,199 @@
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix temptrigger
+
+ifcapable {!trigger || !shared_cache} { finish_test ; return }
+
+
+db close
+set ::enable_shared_cache [sqlite3_enable_shared_cache]
+sqlite3_enable_shared_cache 1
+
+sqlite3 db test.db
+sqlite3 db2 test.db
+
+do_test temptrigger-1.1 {
+  execsql {
+    CREATE TABLE t1(a, b);
+    CREATE TEMP TABLE tt1(a, b);
+    CREATE TEMP TRIGGER tr1 AFTER INSERT ON t1 BEGIN
+      INSERT INTO tt1 VALUES(new.a, new.b);
+    END;
+  }
+} {}
+
+do_test temptrigger-1.2.1 {
+  execsql { INSERT INTO t1 VALUES(1, 2) }
+  execsql { SELECT * FROM t1 }
+} {1 2}
+do_test temptrigger-1.2.2 {
+  execsql { SELECT * FROM tt1 }
+} {1 2}
+do_test temptrigger-1.2.3 {
+  execsql { INSERT INTO t1 VALUES(3, 4) } db2
+  execsql { SELECT * FROM t1 }
+} {1 2 3 4}
+do_test temptrigger-1.2.4 {
+  execsql { SELECT * FROM tt1 }
+} {1 2}
+
+do_test temptrigger-1.3 {
+  execsql { BEGIN; CREATE TABLE t3(a, b); ROLLBACK; } db2
+} {}
+
+do_test temptrigger-1.4 {
+  execsql { INSERT INTO t1 VALUES(5, 6) }
+  execsql { SELECT * FROM tt1 }
+} {1 2 5 6}
+
+do_test temptrigger-1.5 {
+  # Before the bug was fixed, the following 'DROP TRIGGER' hit an 
+  # assert if executed.
+  #execsql { DROP TRIGGER tr1 }
+} {}
+
+catch {db close}
+catch {db2 close}
+
+do_test temptrigger-2.1 {
+  sqlite3 db test.db
+  execsql {
+    DELETE FROM t1;
+    CREATE TEMP TABLE tt1(a, b);
+    CREATE TEMP TRIGGER tr1 AFTER INSERT ON t1 BEGIN
+      INSERT INTO tt1 VALUES(new.a, new.b);
+    END;
+  }
+} {}
+do_test temptrigger-2.2 {
+  execsql {
+    INSERT INTO t1 VALUES(10, 20);
+    SELECT * FROM tt1;
+  }
+} {10 20}
+do_test temptrigger-2.3 {
+  sqlite3 db2 test.db
+  db2 close
+} {}
+do_test temptrigger-2.4 {
+  execsql {
+    INSERT INTO t1 VALUES(30, 40);
+    SELECT * FROM tt1;
+  }
+} {10 20 30 40}
+do_test temptrigger-2.5 {
+  #execsql { DROP TRIGGER tr1 }
+} {}
+
+catch {db close}
+catch {db2 close}
+sqlite3_enable_shared_cache $::enable_shared_cache
+
+do_test temptrigger-3.1 {
+  catch { forcedelete test2.db test2.db-journal }
+  catch { forcedelete test.db test.db-journal }
+  sqlite3 db test.db 
+  sqlite3 db2 test2.db 
+  execsql { CREATE TABLE t2(a, b) } db2
+  execsql {
+    ATTACH 'test2.db' AS aux;
+    CREATE TEMP TABLE tt2(a, b);
+    CREATE TEMP TRIGGER tr2 AFTER INSERT ON aux.t2 BEGIN
+      INSERT INTO tt2 VALUES(new.a, new.b);
+    END;
+  }
+} {}
+
+do_test temptrigger-3.2.1 {
+  execsql { 
+    INSERT INTO aux.t2 VALUES(1, 2);
+    SELECT * FROM aux.t2;
+  }
+} {1 2}
+do_test temptrigger-3.2.2 {
+  execsql { SELECT * FROM tt2 }
+} {1 2}
+
+do_test temptrigger-3.3.1 {
+  execsql { CREATE TABLE t3(a, b) } db2
+  execsql { 
+    INSERT INTO aux.t2 VALUES(3, 4);
+    SELECT * FROM aux.t2;
+  }
+} {1 2 3 4}
+do_test temptrigger-3.3.2 {
+  execsql { SELECT * FROM tt2 }
+} {1 2 3 4}
+
+do_test temptrigger-3.4 {
+  # Before the bug was fixed, the following 'DROP TRIGGER' hit an 
+  # assert if executed.
+  #execsql { DROP TRIGGER tr2 }
+} {}
+
+catch { db close }
+catch { db2 close }
+
+
+reset_db
+do_execsql_test 4.0 {
+  CREATE TABLE t1(x);
+  CREATE TEMP TRIGGER tr1 BEFORE INSERT ON t1 BEGIN
+    SELECT 1,2,3;
+  END;
+}
+
+do_execsql_test 4.1 {
+  CREATE TEMP TABLE t1(x);
+}
+
+reset_db
+do_execsql_test 5.0 {
+  CREATE TABLE t1(x);
+  CREATE TEMP TRIGGER tr1 BEFORE INSERT ON t1 BEGIN SELECT 1,2,3; END;
+}
+
+do_test 5.1 {
+  sqlite3 db2 test.db
+  execsql { DROP TABLE t1 } db2
+} {}
+
+do_execsql_test 5.2 {
+  SELECT * FROM sqlite_master;
+  SELECT * FROM temp.sqlite_master;
+} {
+  trigger tr1 t1 0 
+  {CREATE TRIGGER tr1 BEFORE INSERT ON t1 BEGIN SELECT 1,2,3; END}
+}
+db2 close
+
+reset_db
+forcedelete test.db2
+
+do_execsql_test 6.0 {
+  CREATE TABLE t1(x);
+  CREATE TEMP TRIGGER tr1 BEFORE INSERT ON t1 BEGIN 
+    SELECT raise(ABORT, 'error'); 
+  END;
+  ATTACH 'test.db2' AS aux;
+}
+
+do_test 6.1 {
+  sqlite3 db2 test.db2
+  execsql { CREATE TABLE t1(a, b, c); } db2
+} {}
+
+do_execsql_test 6.2 {
+  SELECT type,name,tbl_name,sql FROM aux.sqlite_master;
+  INSERT INTO aux.t1 VALUES(1,2,3);
+} {
+  table t1 t1 {CREATE TABLE t1(a, b, c)}
+}
+
+do_catchsql_test 6.3 {
+  INSERT INTO main.t1 VALUES(1);
+} {1 error}
+db2 close
+
+finish_test

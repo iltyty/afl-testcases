@@ -1,0 +1,26 @@
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+ifcapable !fts1 {
+  finish_test
+  return
+}
+
+do_test fts1m-1.1 {
+  execsql {
+    CREATE VIRTUAL TABLE t1 USING fts1(a, b, c);
+    INSERT INTO t1(a, b, c) VALUES('one three four', 'one four', 'one two');
+    SELECT a, b, c FROM t1 WHERE c MATCH 'two';
+  }
+} {{one three four} {one four} {one two}}
+
+do_test fts1m-1.2 {
+  execsql {
+    SELECT a, b, c FROM t1 WHERE c MATCH 'two';
+    CREATE TABLE t3(a, b, c);
+    SELECT a, b, c FROM t1 WHERE  c  MATCH 'two';
+  }
+} {{one three four} {one four} {one two} {one three four} {one four} {one two}}
+
+finish_test

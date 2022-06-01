@@ -1,0 +1,475 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+
+forcedelete test.db2
+
+do_execsql_test e_update-0.0 {
+  ATTACH 'test.db2' AS aux;
+  CREATE TABLE t1(a, b);
+  CREATE TABLE t2(a, b, c);
+  CREATE TABLE t3(a, b UNIQUE);
+  CREATE TABLE t6(x, y);
+  CREATE INDEX i1 ON t1(a);
+
+  CREATE TEMP TABLE t4(x, y);
+  CREATE TEMP TABLE t6(x, y);
+
+  CREATE TABLE aux.t1(a, b);
+  CREATE TABLE aux.t5(a, b);
+} {}
+
+proc do_update_tests {args} {
+  uplevel do_select_tests $args
+}
+
+do_update_tests e_update-0 {
+  1    "UPDATE t1 SET a=10" {}
+  2    "UPDATE t1 SET a=10, b=5" {}
+  3    "UPDATE t1 SET a=10 WHERE b=5" {}
+  4    "UPDATE t1 SET b=5,a=10 WHERE 1" {}
+  5    "UPDATE main.t1 SET a=10" {}
+  6    "UPDATE main.t1 SET a=10, b=5" {}
+  7    "UPDATE main.t1 SET a=10 WHERE b=5" {}
+  9    "UPDATE OR ROLLBACK t1 SET a=10" {}
+  10   "UPDATE OR ROLLBACK t1 SET a=10, b=5" {}
+  11   "UPDATE OR ROLLBACK t1 SET a=10 WHERE b=5" {}
+  12   "UPDATE OR ROLLBACK t1 SET b=5,a=10 WHERE 1" {}
+  13   "UPDATE OR ROLLBACK main.t1 SET a=10" {}
+  14   "UPDATE OR ROLLBACK main.t1 SET a=10, b=5" {}
+  15   "UPDATE OR ROLLBACK main.t1 SET a=10 WHERE b=5" {}
+  16   "UPDATE OR ROLLBACK main.t1 SET b=5,a=10 WHERE 1" {}
+  17   "UPDATE OR ABORT t1 SET a=10" {}
+  18   "UPDATE OR ABORT t1 SET a=10, b=5" {}
+  19   "UPDATE OR ABORT t1 SET a=10 WHERE b=5" {}
+  20   "UPDATE OR ABORT t1 SET b=5,a=10 WHERE 1" {}
+  21   "UPDATE OR ABORT main.t1 SET a=10" {}
+  22   "UPDATE OR ABORT main.t1 SET a=10, b=5" {}
+  23   "UPDATE OR ABORT main.t1 SET a=10 WHERE b=5" {}
+  24   "UPDATE OR ABORT main.t1 SET b=5,a=10 WHERE 1" {}
+  25   "UPDATE OR REPLACE t1 SET a=10" {}
+  26   "UPDATE OR REPLACE t1 SET a=10, b=5" {}
+  27   "UPDATE OR REPLACE t1 SET a=10 WHERE b=5" {}
+  28   "UPDATE OR REPLACE t1 SET b=5,a=10 WHERE 1" {}
+  29   "UPDATE OR REPLACE main.t1 SET a=10" {}
+  30   "UPDATE OR REPLACE main.t1 SET a=10, b=5" {}
+  31   "UPDATE OR REPLACE main.t1 SET a=10 WHERE b=5" {}
+  32   "UPDATE OR REPLACE main.t1 SET b=5,a=10 WHERE 1" {}
+  33   "UPDATE OR FAIL t1 SET a=10" {}
+  34   "UPDATE OR FAIL t1 SET a=10, b=5" {}
+  35   "UPDATE OR FAIL t1 SET a=10 WHERE b=5" {}
+  36   "UPDATE OR FAIL t1 SET b=5,a=10 WHERE 1" {}
+  37   "UPDATE OR FAIL main.t1 SET a=10" {}
+  38   "UPDATE OR FAIL main.t1 SET a=10, b=5" {}
+  39   "UPDATE OR FAIL main.t1 SET a=10 WHERE b=5" {}
+  40   "UPDATE OR FAIL main.t1 SET b=5,a=10 WHERE 1" {}
+  41   "UPDATE OR IGNORE t1 SET a=10" {}
+  42   "UPDATE OR IGNORE t1 SET a=10, b=5" {}
+  43   "UPDATE OR IGNORE t1 SET a=10 WHERE b=5" {}
+  44   "UPDATE OR IGNORE t1 SET b=5,a=10 WHERE 1" {}
+  45   "UPDATE OR IGNORE main.t1 SET a=10" {}
+  46   "UPDATE OR IGNORE main.t1 SET a=10, b=5" {}
+  47   "UPDATE OR IGNORE main.t1 SET a=10 WHERE b=5" {}
+  48   "UPDATE OR IGNORE main.t1 SET b=5,a=10 WHERE 1" {}
+}
+
+do_execsql_test e_update-1.1.0 {
+  INSERT INTO main.t1 VALUES(1, 'i');
+  INSERT INTO main.t1 VALUES(2, 'ii');
+  INSERT INTO main.t1 VALUES(3, 'iii');
+
+  INSERT INTO aux.t1 VALUES(1, 'I');
+  INSERT INTO aux.t1 VALUES(2, 'II');
+  INSERT INTO aux.t1 VALUES(3, 'III');
+} {}
+do_update_tests e_update-1.1 {
+  1.1  "UPDATE t1 SET a = a+1; SELECT * FROM t1"             {2 i  3 ii  4 iii}
+  1.2  "UPDATE main.t1 SET a = a+1; SELECT * FROM main.t1"   {3 i  4 ii  5 iii}
+  1.3  "UPDATE aux.t1 SET a = a+1; SELECT * FROM aux.t1"     {2 I  3 II  4 III}
+
+  2.1  "UPDATE t1 SET a = a+1 WHERE a = 1; SELECT * FROM t1" {3 i  4 ii  5 iii}
+  2.2  "UPDATE t1 SET a = a+1 WHERE a = 4; SELECT * FROM t1" {3 i  5 ii  5 iii}
+}
+
+do_execsql_test e_update-1.2.0 {
+  DELETE FROM main.t1;
+  INSERT INTO main.t1 VALUES(1, 'i');
+  INSERT INTO main.t1 VALUES(2, 'ii');
+  INSERT INTO main.t1 VALUES(3, 'iii');
+} {}
+do_update_tests e_update-1.2 {
+  1  "UPDATE t1 SET b = 'roman' ; SELECT * FROM t1"
+     {1 roman  2 roman  3 roman}
+
+  2  "UPDATE t1 SET a = 'greek' ; SELECT * FROM t1"
+     {greek roman  greek roman  greek roman}
+}
+
+do_execsql_test e_update-1.3.0 {
+  DELETE FROM main.t1;
+  INSERT INTO main.t1 VALUES(NULL, '');
+  INSERT INTO main.t1 VALUES(1, 'i');
+  INSERT INTO main.t1 VALUES(2, 'ii');
+  INSERT INTO main.t1 VALUES(3, 'iii');
+} {}
+do_update_tests e_update-1.3 {
+  1  "UPDATE t1 SET b = 'roman' WHERE a<2 ; SELECT * FROM t1"
+     {{} {}  1 roman  2 ii  3 iii}
+
+  2  "UPDATE t1 SET b = 'egyptian' WHERE (a-3)/10.0 ; SELECT * FROM t1"
+     {{} {}  1 egyptian  2 egyptian  3 iii}
+
+  3  "UPDATE t1 SET b = 'macedonian' WHERE a; SELECT * FROM t1"
+     {{} {}  1 macedonian  2 macedonian  3 macedonian}
+
+  4  "UPDATE t1 SET b = 'lithuanian' WHERE a IS NULL; SELECT * FROM t1"
+     {{} lithuanian  1 macedonian  2 macedonian  3 macedonian}
+}
+
+do_execsql_test e_update-1.4.0 {
+  DELETE FROM main.t1;
+  INSERT INTO main.t1 VALUES(NULL, '');
+  INSERT INTO main.t1 VALUES(1, 'i');
+  INSERT INTO main.t1 VALUES(2, 'ii');
+  INSERT INTO main.t1 VALUES(3, 'iii');
+} {}
+do_update_tests e_update-1.4 -query {
+  SELECT * FROM t1
+} {
+  1  "UPDATE t1 SET b = 'burmese' WHERE a=5" {{} {}  1 i  2 ii  3 iii}
+
+  2  "UPDATE t1 SET b = 'burmese' WHERE length(b)<1 AND a IS NOT NULL"
+     {{} {}  1 i  2 ii  3 iii}
+
+  3  "UPDATE t1 SET b = 'burmese' WHERE 0" {{} {}  1 i  2 ii  3 iii}
+
+  4  "UPDATE t1 SET b = 'burmese' WHERE (SELECT a FROM t1 WHERE rowid=1)"
+     {{} {}  1 i  2 ii  3 iii}
+}
+
+do_execsql_test e_update-1.5.0 {
+  INSERT INTO t2(rowid, a, b, c) VALUES(1,  3, 1, 4);
+  INSERT INTO t2(rowid, a, b, c) VALUES(2,  1, 5, 9);
+  INSERT INTO t2(rowid, a, b, c) VALUES(3,  2, 6, 5);
+} {}
+do_update_tests e_update-1.5 -query {
+  SELECT * FROM t2
+} {
+  1   "UPDATE t2 SET c = 1+1 WHERE a=2" 
+      {3 1 4   1 5 9   2 6 2}
+
+  2   "UPDATE t2 SET b = 4/2, c=CAST((0.4*5) AS INTEGER) WHERE a<3"
+      {3 1 4   1 2 2   2 2 2}
+
+  3   "UPDATE t2 SET a = 1"
+      {1 1 4   1 2 2   1 2 2}
+
+  4   "UPDATE t2 SET b = (SELECT count(*)+2 FROM t2), c = 24/3+1 WHERE rowid=2"
+      {1 1 4   1 5 9   1 2 2}
+
+  5   "UPDATE t2 SET a = 3 WHERE c = 4"
+      {3 1 4   1 5 9   1 2 2}
+
+  6   "UPDATE t2 SET a = b WHERE rowid>2"
+      {3 1 4   1 5 9   2 2 2}
+
+  6   "UPDATE t2 SET b=6, c=5 WHERE a=b AND b=c"
+      {3 1 4   1 5 9   2 6 5}
+}
+
+do_update_tests e_update-1.6 -query {
+  SELECT * FROM t2
+} {
+  1   "UPDATE t2 SET c=5, c=6, c=7 WHERE rowid=1" {3 1 7   1 5 9   2 6 5}
+  2   "UPDATE t2 SET c=7, c=6, c=5 WHERE rowid=1" {3 1 5   1 5 9   2 6 5}
+  3   "UPDATE t2 SET c=5, b=6, c=7 WHERE rowid=1" {3 6 7   1 5 9   2 6 5}
+}
+
+do_execsql_test e_update-1.7.0 {
+  DELETE FROM t2;
+  INSERT INTO t2(rowid, a, b, c) VALUES(1,  3, 1, 4);
+  INSERT INTO t2(rowid, a, b, c) VALUES(2,  1, 5, 9);
+  INSERT INTO t2(rowid, a, b, c) VALUES(3,  2, 6, 5);
+} {}
+do_update_tests e_update-1.7 -query {
+  SELECT * FROM t2
+} {
+  1   "UPDATE t2 SET a=b+c"          {5 1 4     14 5 9   11  6 5}
+  2   "UPDATE t2 SET a=b, b=a"       {1 5 4     5 14 9    6 11 5}
+  3   "UPDATE t2 SET a=c||c, c=NULL" {44 5 {}  99 14 {}  55 11 {}}
+}
+
+do_execsql_test e_update-1.8.0 {
+  DELETE FROM t3;
+  INSERT INTO t3 VALUES(1, 'one');
+  INSERT INTO t3 VALUES(2, 'two');
+  INSERT INTO t3 VALUES(3, 'three');
+  INSERT INTO t3 VALUES(4, 'four');
+} {}
+foreach {tn sql error ac data } {
+  1  "UPDATE t3 SET b='one' WHERE a=3" 
+     {UNIQUE constraint failed: t3.b} 1 {1 one 2 two 3 three 4 four}
+
+  2  "UPDATE OR REPLACE t3 SET b='one' WHERE a=3" 
+     {} 1 {2 two 3 one 4 four}
+
+  3  "UPDATE OR FAIL t3 SET b='three'"
+     {UNIQUE constraint failed: t3.b} 1 {2 three 3 one 4 four}
+
+  4  "UPDATE OR IGNORE t3 SET b='three' WHERE a=3" 
+     {} 1 {2 three 3 one 4 four}
+
+  5  "UPDATE OR ABORT t3 SET b='three' WHERE a=3" 
+     {UNIQUE constraint failed: t3.b} 1 {2 three 3 one 4 four}
+
+  6  "BEGIN" {} 0 {2 three 3 one 4 four}
+
+  7  "UPDATE t3 SET b='three' WHERE a=3" 
+     {UNIQUE constraint failed: t3.b} 0 {2 three 3 one 4 four}
+
+  8  "UPDATE OR ABORT t3 SET b='three' WHERE a=3" 
+     {UNIQUE constraint failed: t3.b} 0 {2 three 3 one 4 four}
+
+  9  "UPDATE OR FAIL t3 SET b='two'"
+     {UNIQUE constraint failed: t3.b} 0 {2 two 3 one 4 four}
+
+  10 "UPDATE OR IGNORE t3 SET b='four' WHERE a=3"
+     {} 0 {2 two 3 one 4 four}
+
+  11 "UPDATE OR REPLACE t3 SET b='four' WHERE a=3"
+     {} 0 {2 two 3 four}
+
+  12 "UPDATE OR ROLLBACK t3 SET b='four'"
+     {UNIQUE constraint failed: t3.b} 1 {2 three 3 one 4 four}
+} {
+  do_catchsql_test e_update-1.8.$tn.1 $sql [list [expr {$error!=""}] $error]
+  do_execsql_test  e_update-1.8.$tn.2 {SELECT * FROM t3} [list {*}$data]
+  do_test          e_update-1.8.$tn.3 {sqlite3_get_autocommit db} $ac
+}
+
+
+
+do_update_tests e_update-2.1 -error {
+  qualified table names are not allowed on INSERT, UPDATE, and DELETE statements within triggers
+} {
+  1 {
+      CREATE TRIGGER tr1 AFTER INSERT ON t1 BEGIN
+        UPDATE main.t2 SET a=1, b=2, c=3;
+      END;
+  } {}
+
+  2 {
+      CREATE TRIGGER tr1 BEFORE UPDATE ON t2 BEGIN
+        UPDATE aux.t1 SET a=1, b=2;
+      END;
+  } {}
+
+  3 {
+      CREATE TRIGGER tr1 AFTER DELETE ON t4 BEGIN
+        UPDATE main.t1 SET a=1, b=2;
+      END;
+  } {}
+}
+
+do_update_tests e_update-2.2 -error {
+  no such table: %s
+} {
+  1 {
+      CREATE TRIGGER tr1 AFTER INSERT ON t1 BEGIN
+        UPDATE t4 SET x=x+1;
+      END;
+      INSERT INTO t1 VALUES(1, 2);
+  } "main.t4"
+
+  2 {
+      CREATE TRIGGER aux.tr1 AFTER INSERT ON t5 BEGIN
+        UPDATE t4 SET x=x+1;
+      END;
+      INSERT INTO t5 VALUES(1, 2);
+  } "aux.t4"
+}
+do_execsql_test e_update-2.2.X {
+  DROP TRIGGER tr1;
+  DROP TRIGGER aux.tr1;
+} {}
+
+do_execsql_test e_update-2.3.0 {
+  SELECT 'main', tbl_name FROM main.sqlite_master WHERE type = 'table';
+  SELECT 'temp', tbl_name FROM sqlite_temp_master WHERE type = 'table';
+  SELECT 'aux', tbl_name FROM aux.sqlite_master WHERE type = 'table';
+} [list {*}{
+    main t1
+    main t2
+    main t3
+    main t6
+    temp t4
+    temp t6
+    aux  t1
+    aux  t5
+}]
+do_execsql_test e_update-2.3.1 {
+  DELETE FROM main.t6;
+  DELETE FROM temp.t6;
+  INSERT INTO main.t6 VALUES(1, 2);
+  INSERT INTO temp.t6 VALUES(1, 2);
+
+  CREATE TRIGGER temp.tr1 AFTER INSERT ON t4 BEGIN
+    UPDATE t6 SET x=x+1;
+  END;
+
+  INSERT INTO t4 VALUES(1, 2);
+  SELECT * FROM main.t6;
+  SELECT * FROM temp.t6;
+} {1 2 2 2}
+do_execsql_test e_update-2.3.2 {
+  DELETE FROM main.t1;
+  DELETE FROM aux.t1;
+  INSERT INTO main.t1 VALUES(1, 2);
+  INSERT INTO aux.t1 VALUES(1, 2);
+
+  CREATE TRIGGER temp.tr2 AFTER DELETE ON t4 BEGIN
+    UPDATE t1 SET a=a+1;
+  END;
+
+  DELETE FROM t4;
+  SELECT * FROM main.t1;
+  SELECT * FROM aux.t1;
+} {2 2 1 2}
+do_execsql_test e_update-2.3.3 {
+  DELETE FROM aux.t5;
+  INSERT INTO aux.t5 VALUES(1, 2);
+
+  INSERT INTO t4 VALUES('x', 'y');
+  CREATE TRIGGER temp.tr3 AFTER UPDATE ON t4 BEGIN
+    UPDATE t5 SET a=a+1;
+  END;
+
+  UPDATE t4 SET x=10;
+  SELECT * FROM aux.t5;
+} {2 2}
+
+do_update_tests e_update-2.4 -error {
+  the %s %s clause is not allowed on UPDATE or DELETE statements within triggers
+} {
+  1 {
+      CREATE TRIGGER tr1 AFTER INSERT ON t2 BEGIN
+        UPDATE t1 INDEXED BY i1 SET a=a+1;
+      END;
+  } {INDEXED BY}
+
+  2 {
+      CREATE TRIGGER tr1 AFTER INSERT ON t2 BEGIN
+        UPDATE t1 NOT INDEXED SET a=a+1;
+      END;
+  } {NOT INDEXED}
+}
+
+ifcapable update_delete_limit {
+
+do_update_tests e_update-2.5 -error {
+  near "%s": syntax error
+} {
+  1 {
+      CREATE TRIGGER tr1 AFTER INSERT ON t2 BEGIN
+        UPDATE t1 SET a=a+1 LIMIT 10;
+      END;
+  } {LIMIT}
+
+  2 {
+      CREATE TRIGGER tr1 AFTER INSERT ON t2 BEGIN
+        UPDATE t1 SET a=a+1 ORDER BY a LIMIT 10;
+      END;
+  } {ORDER}
+
+  3 {
+      CREATE TRIGGER tr1 AFTER INSERT ON t2 BEGIN
+        UPDATE t1 SET a=a+1 ORDER BY a LIMIT 10 OFFSET 2;
+      END;
+  } {ORDER}
+
+  4 {
+      CREATE TRIGGER tr1 AFTER INSERT ON t2 BEGIN
+        UPDATE t1 SET a=a+1 LIMIT 10 OFFSET 2;
+      END;
+  } {LIMIT}
+}
+
+do_update_tests e_update-3.0 {
+  1   "UPDATE t1 SET a=b LIMIT 5"                                    {}
+  2   "UPDATE t1 SET a=b LIMIT 5-1 OFFSET 2+2"                       {}
+  3   "UPDATE t1 SET a=b LIMIT 2+2, 16/4"                            {}
+  4   "UPDATE t1 SET a=b ORDER BY a LIMIT 5"                         {}
+  5   "UPDATE t1 SET a=b ORDER BY a LIMIT 5-1 OFFSET 2+2"            {}
+  6   "UPDATE t1 SET a=b ORDER BY a LIMIT 2+2, 16/4"                 {}
+  7   "UPDATE t1 SET a=b WHERE a>2 LIMIT 5"                          {}
+  8   "UPDATE t1 SET a=b WHERE a>2 LIMIT 5-1 OFFSET 2+2"             {}
+  9   "UPDATE t1 SET a=b WHERE a>2 LIMIT 2+2, 16/4"                  {}
+  10  "UPDATE t1 SET a=b WHERE a>2 ORDER BY a LIMIT 5"               {}
+  11  "UPDATE t1 SET a=b WHERE a>2 ORDER BY a LIMIT 5-1 OFFSET 2+2"  {}
+  12  "UPDATE t1 SET a=b WHERE a>2 ORDER BY a LIMIT 2+2, 16/4"       {}
+}
+
+do_execsql_test e_update-3.1.0 {
+  CREATE TABLE t7(q, r, s);
+  INSERT INTO t7 VALUES(1, 'one',   'X');
+  INSERT INTO t7 VALUES(2, 'two',   'X');
+  INSERT INTO t7 VALUES(3, 'three', 'X');
+  INSERT INTO t7 VALUES(4, 'four',  'X');
+  INSERT INTO t7 VALUES(5, 'five',  'X');
+  INSERT INTO t7 VALUES(6, 'six',   'X');
+  INSERT INTO t7 VALUES(7, 'seven', 'X');
+  INSERT INTO t7 VALUES(8, 'eight', 'X');
+  INSERT INTO t7 VALUES(9, 'nine',  'X');
+  INSERT INTO t7 VALUES(10, 'ten',  'X');
+} {}
+
+do_update_tests e_update-3.1 -query { SELECT s FROM t7 } {
+  1   "UPDATE t7 SET s = q LIMIT 5"            {1 2 3 4 5 X X X X X}
+  2   "UPDATE t7 SET s = r WHERE q>2 LIMIT 4"  {1 2 three four five six X X X X}
+  3   "UPDATE t7 SET s = q LIMIT 0"            {1 2 three four five six X X X X}
+}
+
+do_update_tests e_update-3.2 -query { SELECT s FROM t7 } {
+  1   "UPDATE t7 SET s = q LIMIT -1"              {1 2 3 4 5 6 7 8 9 10}
+  2   "UPDATE t7 SET s = r WHERE q>4 LIMIT -1"  
+      {1 2 3 4 five six seven eight nine ten}
+  3   "UPDATE t7 SET s = 'X' LIMIT -1"            {X X X X X X X X X X}
+}
+
+do_update_tests e_update-3.3 -query { SELECT s FROM t7 } {
+  1   "UPDATE t7 SET s = q ORDER BY r LIMIT 3"      {X X X 4 5 X X 8 X X}
+  2   "UPDATE t7 SET s = r ORDER BY r DESC LIMIT 2" {X two three 4 5 X X 8 X X}
+  3   "UPDATE t7 SET s = q ORDER BY q DESC LIMIT 5" {X two three 4 5 6 7 8 9 10}
+
+  X   "UPDATE t7 SET s = 'X'"                       {X X X X X X X X X X}
+}
+
+do_update_tests e_update-3.3 -query { SELECT s FROM t7 } {
+  1   "UPDATE t7 SET s = q ORDER BY q LIMIT 3 OFFSET 2"  {X X 3 4 5 X X X X X}
+  2   "UPDATE t7 SET s = q ORDER BY q DESC LIMIT 2, 3 "  {X X 3 4 5 6 7 8 X X}
+
+  X   "UPDATE t7 SET s = 'X'"                       {X X X X X X X X X X}
+}
+
+do_update_tests e_update-3.4 -query { SELECT s FROM t7 } {
+  1   "UPDATE t7 SET s = q LIMIT 4, 2"        {X X X X 5 6 X X X X}
+  2   "UPDATE t7 SET s = q LIMIT 2 OFFSET 7"  {X X X X 5 6 X 8 9 X}
+}
+
+do_execsql_test e_update-3.5.0 {
+  CREATE TABLE t8(x);
+  CREATE TRIGGER tr7 BEFORE UPDATE ON t7 BEGIN
+    INSERT INTO t8 VALUES(old.q);
+  END;
+} {}
+do_update_tests e_update-3.5 -query { SELECT x FROM t8 ; DELETE FROM t8 } {
+  1   "UPDATE t7 SET s = q ORDER BY r LIMIT -1"        {1 2 3 4 5 6 7 8 9 10}
+  2   "UPDATE t7 SET s = q ORDER BY r ASC LIMIT -1"    {1 2 3 4 5 6 7 8 9 10}
+  3   "UPDATE t7 SET s = q ORDER BY r DESC LIMIT -1"   {1 2 3 4 5 6 7 8 9 10}
+  4   "UPDATE t7 SET s = q ORDER BY q DESC LIMIT 5"    {6 7 8 9 10}
+}
+
+
+} ;# ifcapable update_delete_limit
+ 
+finish_test

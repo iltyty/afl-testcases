@@ -1,0 +1,23 @@
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix exprfault
+
+do_execsql_test 1.0 {
+  CREATE TABLE t1(a);                 
+  CREATE TABLE t2(d);                 
+}
+faultsim_save_and_close
+
+do_faultsim_test 1.1 -faults oom* -prep {
+  faultsim_restore_and_reopen
+} -body {
+  execsql {
+    SELECT a = ( SELECT d FROM (SELECT d FROM t2) ) FROM t1 
+  }
+} -test {
+  faultsim_test_result {0 {}}
+}
+
+
+finish_test

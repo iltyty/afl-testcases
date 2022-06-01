@@ -1,0 +1,43 @@
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+source $testdir/lock_common.tcl
+source $testdir/malloc_common.tcl
+
+if {[permutation] == "inmemory_journal"} {
+  finish_test
+  return
+}
+
+do_test pagerfault3-pre1 {
+  execsql {
+    PRAGMA auto_vacuum = 0;
+    PRAGMA page_size = 2048;
+    CREATE TABLE t1(x);
+    INSERT INTO t1 VALUES(randomblob(1200));
+    PRAGMA page_count;
+  }
+} {2}
+do_test pagerfault3-pre2 {
+  faultsim_save_and_close
+  faultsim_restore_and_reopen
+  execsql { 
+    PRAGMA page_size = 1024;
+    VACUUM;
+    PRAGMA page_count;
+  }
+} {3}
+
+do_faultsim_test pagerfault3-1 -faults ioerr-transient -prep {
+  faultsim_restore_and_reopen
+} -body {
+  execsql { 
+    PRAGMA page_size = 1024;
+    VACUUM;
+  }
+} -test {
+  faultsim_test_result {0 {}} 
+  faultsim_integrity_check
+}
+
+finish_test
